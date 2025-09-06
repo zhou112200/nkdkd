@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>ECDH Debug</title></head>
+<body>
+  <h2>ECDH 密钥交换测试</h2>
+  <input id="password" placeholder="输入房间密码">
+  <button onclick="join()">加入</button>
+  <p id="status">🔴 密钥尚未建立</p>
+
+<script>
+let ws, myKeyPair, sharedKey, peerPubKey;
+const enc = new TextEncoder();
+
+async function join() {
+  const roomPassword = document.getElementById("password").value.trim();
+  if (!roomPassword) return alert("请输入房间密码");
+
+  ws = new WebSocket("wss://crimson-sunset-34ff.zhoujingheng79.workers.dev");
+
+  myKeyPair = await crypto.subtle.generateKey(
+    { name: "ECDH", namedCurve: "P-256" },
+    true,
+    ["deriveBits"]
+  );
+
+  const pubKeyRaw = new Uint8Array(await crypto.subtle.exportKey("raw", myKeyPair.publicKey));
+
+  ws.addEventListener("open", () => {
+    ws.send(JSON.stringify({ type: "pubkey", key: Array.from(pubKeyRaw), pw: roomPassword }));
+  });
+
+  ws.onmessage = async (event) => {
+    const msg = JSON.parse(event.data);
+    if (msg.type === "pubkey" && !sharedKey) {
+      peerPubKey = await crypto.subtle.importKey(
+        "raw",
+        new Uint8Array(msg.key),
+        { name: "ECDH", namedCurve: "P-256" },
+        true,
+        []
+      );
+
+      const bits = await crypto.subtle.deriveBits(
+        { name: "ECDH", public: peerPubKey },
+        myKeyPair.privateKey,
+        256
+      );
+
+      // 把 ECDH bits + 密码 一起派生 AES key
+      const mixInput = new Uint8Array([...new Uint8Array(bits), ...enc.encode(roomPassword)]);
+      const baseKey = await crypto.subtle.importKey("raw", mixInput, "PBKDF2", false, ["deriveKey"]);
+
+      sharedKey = await crypto.subtle.deriveKey(
+        { name: "PBKDF2", salt: enc.encode("chat-salt"), iterations: 100000, hash: "SHA-256" },
+        baseKey,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"]
+      );
+
+      document.getElementById("status").textContent = "🟢 共享密钥建立完成 ✅";
+    }
+  };
+}
+</script>
+</body>
+</html>
