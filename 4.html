@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AES-GCM 文本加密工具</title>
+</head>
+<body>
+  <h2>🔒 AES-GCM 文本加密工具</h2>
+  
+  <input id="password" type="password" placeholder="输入口令"><br><br>
+  <textarea id="message" rows="4" cols="50" placeholder="输入要加密的文字"></textarea><br><br>
+  
+  <button onclick="encryptMessage()">加密</button>
+  <button onclick="decryptMessage()">解密</button>
+  
+  <p><b>加密结果（Base64）：</b></p>
+  <textarea id="cipher" rows="6" cols="70" readonly></textarea>
+  
+  <p><b>解密结果：</b></p>
+  <textarea id="plain" rows="4" cols="50" readonly></textarea>
+  
+  <script>
+    let encKey; // 保存派生的密钥
+
+    async function getKey(password, salt) {
+      const pwUtf8 = new TextEncoder().encode(password);
+      const pwKey = await crypto.subtle.importKey(
+        "raw", pwUtf8, {name: "PBKDF2"}, false, ["deriveKey"]
+      );
+      return crypto.subtle.deriveKey(
+        {
+          name: "PBKDF2",
+          salt: salt,
+          iterations: 100000,
+          hash: "SHA-256"
+        },
+        pwKey,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"]
+      );
+    }
+
+    async function encryptMessage() {
+      const password = document.getElementById("password").value;
+      const message = document.getElementById("message").value;
+      if (!password || !message) {
+        alert("请输入口令和消息！");
+        return;
+      }
+
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const key = await getKey(password, salt);
+
+      const cipherBuffer = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: iv },
+        key,
+        new TextEncoder().encode(message)
+      );
+
+      // 拼接 salt + iv + cipher
+      const full = new Uint8Array(salt.length + iv.length + cipherBuffer.byteLength);
+      full.set(salt);
+      full.set(iv, salt.length);
+      full.set(new Uint8Array(cipherBuffer), salt.length + iv.length);
+
+      document.getElementById("cipher").value = btoa(String.fromCharCode(...full));
+    }
+
+    async function decryptMessage() {
+      const password = document.getElementById("password").value;
+      const cipherText = document.getElementById("cipher").value;
+      if (!password || !cipherText) {
+        alert("请输入口令和密文！");
+        return;
+      }
+
+      const full = Uint8Array.from(atob(cipherText), c => c.charCodeAt(0));
+      const salt = full.slice(0, 16);
+      const iv = full.slice(16, 28);
+      const cipherBytes = full.slice(28);
+
+      const key = await getKey(password, salt);
+
+      try {
+        const plainBuffer = await crypto.subtle.decrypt(
+          { name: "AES-GCM", iv: iv },
+          key,
+          cipherBytes
+        );
+        document.getElementById("plain").value = new TextDecoder().decode(plainBuffer);
+      } catch (e) {
+        alert("解密失败：口令不正确或数据损坏！");
+      }
+    }
+  </script>
+</body>
+</html>
