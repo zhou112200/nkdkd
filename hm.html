@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>AES-GCM 加密/解密工具（含下载）</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f5f7fa; color:#333;
+      display:flex; justify-content:center; align-items:flex-start; min-height:100vh;
+      margin:0; padding:40px;}
+    .container { background:#fff; border-radius:8px; padding:30px 40px; box-shadow:0 4px 10px rgba(0,0,0,0.1);
+      max-width:760px; width:100%; }
+    h2 { text-align:center; margin-bottom:12px; color:#444; }
+    input, textarea, button { width:100%; padding:10px 12px; margin:8px 0; font-size:14px;
+      border-radius:6px; border:1px solid #ccc; box-sizing:border-box; }
+    textarea { resize:vertical; font-family:monospace; }
+    .row { display:flex; gap:10px; flex-wrap:wrap; }
+    .row > * { flex:1; min-width:120px; }
+    .small { width:auto; padding:8px 10px; font-size:13px; }
+    .label { font-weight:bold; margin-top:10px; display:block; }
+    .note { font-size:13px; color:#666; margin-top:6px; }
+    .error { color:red; font-size:13px; margin-top:8px; }
+    .hint { color:#2a6; font-size:13px; margin-top:8px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>🔐 AES-GCM 加密/解密工具（含下载）</h2>
+
+    <input id="password" type="password" placeholder="输入口令">
+
+    <!-- 加密 -->
+    <div class="section">
+      <span class="label">明文（待加密）：</span>
+      <textarea id="message" rows="4" placeholder="输入要加密的文字"></textarea>
+      <div class="row">
+        <button class="small" onclick="encryptMessage()">加密</button>
+        <button class="small" onclick="clearAll()">清空</button>
+      </div>
+
+      <span class="label">加密结果（Base64 密文）：</span>
+      <textarea id="cipher" rows="6" readonly></textarea>
+      <div class="row">
+        <button class="small" onclick="copyToClipboard('cipher')">复制密文</button>
+        <button class="small" onclick="downloadCipherText()">下载 Base64 (.txt)</button>
+        <button class="small" onclick="downloadCipherBinary()">下载 二进制 (.enc)</button>
+      </div>
+      <div class="note">二进制文件 = salt(16) + iv(12) + cipherBytes，用于程序化导入。</div>
+    </div>
+
+    <!-- 解密 -->
+    <div class="section">
+      <span class="label">解密（粘贴密文或加载 .enc）：</span>
+      <textarea id="cipherInput" rows="6" placeholder="粘贴密文"></textarea>
+      <div class="row">
+        <button class="small" onclick="decryptMessage()">解密</button>
+        <button class="small" onclick="tryLoadFile()">从文件加载 .enc</button>
+      </div>
+      <span class="label">解密结果：</span>
+      <textarea id="plain" rows="4" readonly></textarea>
+    </div>
+
+    <!-- 导出 -->
+    <div class="section">
+      <span class="label">导出 / 下载 口令与密文（敏感！）</span>
+      <div class="row">
+        <button class="small" onclick="downloadPassword()">下载口令 (.txt)</button>
+        <button class="small" onclick="downloadExportJSON(false)">导出 JSON（不含口令）</button>
+        <button class="small" onclick="downloadExportJSON(true)">导出 JSON（含口令，需确认）</button>
+      </div>
+      <div class="note">⚠️ 导出含口令会有泄露风险，请谨慎。</div>
+    </div>
+
+    <!-- 工具 -->
+    <div class="section">
+      <span class="label">工具</span>
+      <div class="row">
+        <button class="small" onclick="downloadExample()">下载示例密文 (.enc)</button>
+        <button class="small" onclick="alertAbout()">关于安全性</button>
+      </div>
+    </div>
+
+    <div id="error" class="error"></div>
+    <div id="hint" class="hint"></div>
+    <input id="fileLoader" type="file" accept=".enc" style="display:none" />
+  </div>
+
+  <script>
+    // === 配置 ===
+    const ITERATIONS = 100000, SALT_LEN = 16, IV_LEN = 12;
+    const el = {
+      password: document.getElementById("password"),
+      message: document.getElementById("message"),
+      cipher: document.getElementById("cipher"),
+      cipherIn: document.getElementById("cipherInput"),
+      plain: document.getElementById("plain"),
+      error: document.getElementById("error"),
+      hint: document.getElementById("hint"),
+      fileLoader: document.getElementById("fileLoader")
+    };
+
+    // === 工具函数 ===
+    const ab2b64 = buf => btoa(String.fromCharCode(...new Uint8Array(buf)));
+    const b642ab = base64 => {
+      const bin = atob(base64);
+      return Uint8Array.from(bin, c => c.charCodeAt(0)).buffer;
+    };
+
+    function showError(msg) { el.error.textContent = msg; el.hint.textContent = ""; }
+    function showHint(msg) { el.hint.textContent = msg; el.error.textContent = ""; }
+    function clearAllMessages() { el.error.textContent = ""; el.hint.textContent = ""; }
+
+    function downloadBlob(filename, blob) {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+    const downloadTextFile = (name, text) => downloadBlob(name, new Blob([text], { type: "text/plain" }));
+    const downloadBinaryFile = (name, arr) => downloadBlob(name, new Blob([arr], { type: "application/octet-stream" }));
+
+    async function copyToClipboard(id) {
+      const text = document.getElementById(id).value;
+      if (!text) return showError("没有内容可复制！");
+      try {
+        await navigator.clipboard.writeText(text);
+        showHint("已复制到剪贴板");
+      } catch { showError("复制失败，请手动复制。"); }
+    }
+
+    async function getKey(password, salt) {
+      const pwKey = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+      return crypto.subtle.deriveKey(
+        { name: "PBKDF2", salt, iterations: ITERATIONS, hash: "SHA-256" },
+        pwKey, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
+      );
+    }
+
+    // === 核心功能 ===
+    async function encryptMessage() {
+      clearAllMessages();
+      el.cipher.value = ""; el.plain.value = "";
+      const password = el.password.value.trim(), message = el.message.value;
+      if (!password || !message) return showError("请输入口令和明文！");
+      try {
+        const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
+        const iv = crypto.getRandomValues(new Uint8Array(IV_LEN));
+        const key = await getKey(password, salt);
+        const cipherBuffer = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, new TextEncoder().encode(message));
+        const full = new Uint8Array(salt.length + iv.length + cipherBuffer.byteLength);
+        full.set(salt); full.set(iv, salt.length); full.set(new Uint8Array(cipherBuffer), salt.length + iv.length);
+        el.cipher.value = ab2b64(full.buffer);
+        showHint("✅ 加密成功");
+      } catch (e) { showError("加密失败：" + e.message); }
+    }
+
+    async function decryptMessage() {
+      clearAllMessages();
+      el.plain.value = "";
+      const password = el.password.value.trim(), cipherText = el.cipherIn.value.trim();
+      if (!password || !cipherText) return showError("请输入口令和密文！");
+      try {
+        const full = new Uint8Array(b642ab(cipherText));
+        if (full.length < SALT_LEN + IV_LEN) return showError("❌ 密文不完整！");
+        const salt = full.slice(0, SALT_LEN), iv = full.slice(SALT_LEN, SALT_LEN + IV_LEN), data = full.slice(SALT_LEN + IV_LEN);
+        const key = await getKey(password, salt);
+        const plainBuffer = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, data);
+        el.plain.value = new TextDecoder().decode(plainBuffer);
+        showHint("✅ 解密成功");
+      } catch { showError("❌ 解密失败：口令错误或数据损坏"); }
+    }
+
+    function downloadCipherText() {
+      if (!el.cipher.value) return showError("没有可下载的密文");
+      downloadTextFile(`cipher_${Date.now()}.txt`, el.cipher.value.trim());
+      showHint("已下载 Base64 密文");
+    }
+
+    function downloadCipherBinary() {
+      if (!el.cipher.value) return showError("没有可下载的密文");
+      const arrBuf = b642ab(el.cipher.value.trim());
+      downloadBinaryFile(`cipher_${Date.now()}.enc`, new Uint8Array(arrBuf));
+      showHint("已下载 .enc 文件");
+    }
+
+    function downloadPassword() {
+      const pwd = el.password.value;
+      if (!pwd) return showError("请输入口令");
+      if (!confirm("⚠️ 口令属于高度敏感信息，确定要明文下载吗？")) return;
+      downloadTextFile(`password_${Date.now()}.txt`, pwd);
+      showHint("口令文件已下载");
+    }
+
+    function downloadExportJSON(includePassword) {
+      if (!el.cipher.value) return showError("没有密文可导出");
+      if (includePassword && (!el.password.value || !confirm("⚠️ 确认导出包含口令？"))) return;
+      const payload = {
+        created_at: new Date().toISOString(),
+        cipher_base64: el.cipher.value.trim(),
+        contains_password: includePassword
+      };
+      if (includePassword) payload.password = el.password.value;
+      downloadBlob(`export_${Date.now()}.json`, new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" }));
+      showHint("已导出 JSON 文件");
+    }
+
+    function tryLoadFile() {
+      el.fileLoader.value = "";
+      el.fileLoader.onchange = e => {
+        const f = e.target.files[0]; if (!f) return;
+        const reader = new FileReader();
+        reader.onload = () => { el.cipherIn.value = ab2b64(reader.result); showHint(".enc 文件已加载"); };
+        reader.onerror = () => showError("读取文件失败");
+        reader.readAsArrayBuffer(f);
+      };
+      el.fileLoader.click();
+    }
+
+    function downloadExample() {
+      const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
+      const iv = crypto.getRandomValues(new Uint8Array(IV_LEN));
+      const full = new Uint8Array([...salt, ...iv]);
+      downloadBinaryFile(`example_${Date.now()}.enc`, full);
+      showHint("示例文件已下载");
+    }
+
+    function alertAbout() {
+      alert(`安全性说明：
+1. .enc 格式 = salt(16) + iv(12) + cipherBytes。
+2. 含口令导出会泄露密码，请谨慎。
+3. 建议只保存密文，口令存放于密码管理器。`);
+    }
+
+    function clearAll() {
+      el.password.value = el.message.value = el.cipher.value = el.cipherIn.value = el.plain.value = "";
+      clearAllMessages();
+    }
+  </script>
+</body>
+</html>
