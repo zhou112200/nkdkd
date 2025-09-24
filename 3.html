@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>ChaCha20 测试</title>
+  <script src="https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.10/dist/libsodium-wrappers.js"></script>
+</head>
+<body>
+  <h2>ChaCha20 测试</h2>
+  <button onclick="runTest()">运行测试</button>
+
+  <pre id="output"></pre>
+
+  <script>
+    async function runTest() {
+      await sodium.ready;
+
+      const key = sodium.randombytes_buf(sodium.crypto_aead_chacha20poly1305_ietf_KEYBYTES);
+      const nonce = sodium.randombytes_buf(sodium.crypto_aead_chacha20poly1305_ietf_NPUBBYTES);
+
+      const message = "Hello ChaCha20!";
+      const cipher = sodium.crypto_aead_chacha20poly1305_ietf_encrypt(
+        sodium.from_string(message),
+        null, null, nonce, key
+      );
+
+      const plain = sodium.crypto_aead_chacha20poly1305_ietf_decrypt(
+        null, cipher, null, nonce, key
+      );
+
+      document.getElementById("output").textContent =
+        "原文: " + message + "\n" +
+        "密文(Base64): " + sodium.to_base64(cipher) + "\n" +
+        "解密: " + sodium.to_string(plain);
+    }
+  </script>
+</body>
+</html>
