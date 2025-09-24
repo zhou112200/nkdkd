@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>ChaCha20 安全文本加密</title>
+  <script src="https://cdn.jsdelivr.net/npm/libsodium-wrappers/dist/libsodium-wrappers.js"></script>
+</head>
+<body>
+  <h2>🔒 ChaCha20 文本加密工具</h2>
+  
+  <input id="password" type="password" placeholder="输入口令"><br><br>
+  <textarea id="message" rows="4" cols="40" placeholder="输入要加密的文字"></textarea><br><br>
+  
+  <button onclick="encryptMessage()">加密</button>
+  <button onclick="decryptMessage()">解密</button>
+  
+  <p><b>加密结果：</b></p>
+  <textarea id="cipher" rows="6" cols="80" readonly></textarea>
+  
+  <p><b>解密结果：</b></p>
+  <textarea id="plain" rows="4" cols="40" readonly></textarea>
+  
+  <script>
+    let sodiumReady = (async () => { await sodium.ready; })();
+
+    async function deriveKey(password, salt) {
+      const passwordBytes = sodium.from_string(password);
+      return sodium.crypto_pwhash(
+        sodium.crypto_secretbox_KEYBYTES,
+        passwordBytes,
+        salt,
+        sodium.crypto_pwhash_OPSLIMIT_INTERACTIVE,
+        sodium.crypto_pwhash_MEMLIMIT_INTERACTIVE,
+        sodium.crypto_pwhash_ALG_DEFAULT
+      );
+    }
+
+    async function encryptMessage() {
+      await sodiumReady;
+      const password = document.getElementById("password").value;
+      const message = document.getElementById("message").value;
+      if (!password || !message) {
+        alert("请输入口令和消息！");
+        return;
+      }
+
+      const salt = sodium.randombytes_buf(16); // 16 字节盐
+      const key = await deriveKey(password, salt);
+      const nonce = sodium.randombytes_buf(sodium.crypto_secretbox_NONCEBYTES);
+
+      const cipherBytes = sodium.crypto_secretbox_easy(
+        sodium.from_string(message),
+        nonce,
+        key
+      );
+
+      // 拼接 salt + nonce + cipher
+      const fullCipher = new Uint8Array(salt.length + nonce.length + cipherBytes.length);
+      fullCipher.set(salt);
+      fullCipher.set(nonce, salt.length);
+      fullCipher.set(cipherBytes, salt.length + nonce.length);
+
+      document.getElementById("cipher").value = sodium.to_base64(fullCipher);
+    }
+
+    async function decryptMessage() {
+      await sodiumReady;
+      const password = document.getElementById("password").value;
+      const fullCipherBase64 = document.getElementById("cipher").value;
+      if (!password || !fullCipherBase64) {
+        alert("请输入口令和密文！");
+        return;
+      }
+
+      const fullCipher = sodium.from_base64(fullCipherBase64);
+
+      const salt = fullCipher.slice(0, 16);
+      const nonce = fullCipher.slice(16, 16 + sodium.crypto_secretbox_NONCEBYTES);
+      const cipherBytes = fullCipher.slice(16 + sodium.crypto_secretbox_NONCEBYTES);
+
+      const key = await deriveKey(password, salt);
+      const plainBytes = sodium.crypto_secretbox_open_easy(cipherBytes, nonce, key);
+
+      if (!plainBytes) {
+        alert("解密失败：口令不正确或数据损坏！");
+        return;
+      }
+      document.getElementById("plain").value = sodium.to_string(plainBytes);
+    }
+  </script>
+</body>
+</html>
