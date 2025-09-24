@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>🔐 安全文档工具</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f5f7fa;
+      color: #333;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: 100vh;
+      margin: 0;
+      padding: 40px;
+    }
+    .container {
+      background: #fff;
+      border-radius: 8px;
+      padding: 30px 40px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+      max-width: 800px;
+      width: 100%;
+    }
+    h2 {
+      text-align: center;
+      margin-bottom: 20px;
+      color: #444;
+    }
+    input, button {
+      width: 100%;
+      padding: 10px 12px;
+      margin: 10px 0;
+      font-size: 14px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      box-sizing: border-box;
+    }
+    button {
+      background: #4a90e2;
+      color: white;
+      border: none;
+      cursor: pointer;
+      transition: background 0.3s;
+      margin-top: 5px;
+    }
+    button:hover {
+      background: #357ab7;
+    }
+    #editor {
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      min-height: 300px;
+      padding: 10px;
+      margin-top: 10px;
+      overflow-y: auto;
+    }
+    #editor img {
+      max-width: 100%;
+      margin: 5px 0;
+      resize: both;
+      overflow: auto;
+    }
+    .error {
+      font-size: 13px;
+      margin-top: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>🔐 安全文档工具</h2>
+
+    <input id="password" type="password" placeholder="输入密钥">
+
+    <div id="editor" contenteditable="true" placeholder="输入或粘贴内容，可插入图片..."></div>
+
+    <button onclick="saveAsFile()">💾 保存为加密文件</button>
+    <input type="file" id="fileInput" accept=".enc" style="margin-top:10px;">
+    <button onclick="loadFile()">📂 打开加密文件</button>
+
+    <input type="file" id="imgInput" accept="image/*" style="margin-top:20px;">
+    <button onclick="insertImage()">🖼 插入图片</button>
+
+    <div class="error" id="error"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+  <script>
+    const MAGIC = new TextEncoder().encode("DATA");
+    const VERSION = 2;
+    const PBKDF2_ITERATIONS = 200000;
+
+    async function getKey(password, salt) {
+      const pwUtf8 = new TextEncoder().encode(password);
+      const pwKey = await crypto.subtle.importKey("raw", pwUtf8, { name: "PBKDF2" }, false, ["deriveKey"]);
+      return crypto.subtle.deriveKey(
+        { name: "PBKDF2", salt, iterations: PBKDF2_ITERATIONS, hash: "SHA-256" },
+        pwKey,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"]
+      );
+    }
+
+    function sanitizeHTML(input) {
+      const div = document.createElement("div");
+      div.innerHTML = input;
+      div.querySelectorAll("*").forEach(el => {
+        if (!["P", "BR", "IMG"].includes(el.tagName)) {
+          el.replaceWith(...el.childNodes);
+        }
+      });
+      return div.innerHTML;
+    }
+
+    async function saveAsFile() {
+      clearMsg();
+      const password = document.getElementById("password").value;
+      let message = document.getElementById("editor").innerHTML;
+      message = sanitizeHTML(message);
+      if (!password || !message) return showError("请输入密钥和内容！");
+
+      const { full } = await encryptCore(message, password);
+
+      const date = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = `secure-${date}.enc`;
+
+      const blob = new Blob([full], { type: "application/octet-stream" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(a.href);
+
+      showSuccess("✅ 文件已保存");
+    }
+
+    async function loadFile() {
+      clearMsg();
+      const password = document.getElementById("password").value;
+      const fileInput = document.getElementById("fileInput");
+      if (!password) return showError("请输入密钥！");
+      if (!fileInput.files.length) return showError("请选择一个文件！");
+
+      const file = fileInput.files[0];
+      const arrayBuffer = await file.arrayBuffer();
+      const full = new Uint8Array(arrayBuffer);
+
+      try {
+        const magic = full.slice(0, 4);
+        const magicStr = new TextDecoder().decode(magic);
+        if (magicStr !== "DATA") throw new Error("文件头不匹配");
+
+        const version = full[4];
+        if (version < 1 || version > VERSION) throw new Error("不支持的文件版本：" + version);
+
+        let offset = 5;
+        const salt = full.slice(offset, offset + 16); offset += 16;
+        const iv = full.slice(offset, offset + 12); offset += 12;
+        const cipherBytes = full.slice(offset);
+
+        const key = await getKey(password, salt);
+        const plainBuffer = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, cipherBytes);
+
+        const decompressed = pako.inflate(new Uint8Array(plainBuffer));
+        const plaintext = new TextDecoder().decode(decompressed);
+
+        document.getElementById("editor").innerHTML = plaintext;
+        showSuccess("✅ 解密成功");
+      } catch (e) {
+        showError("❌ 解密失败：" + e.message);
+      }
+    }
+
+    function insertImage() {
+      const imgInput = document.getElementById("imgInput");
+      if (!imgInput.files.length) return showError("请选择一张图片！");
+
+      const file = imgInput.files[0];
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const img = document.createElement("img");
+        img.src = e.target.result;
+        document.getElementById("editor").appendChild(img);
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function encryptCore(message, password) {
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const key = await getKey(password, salt);
+
+      const compressed = pako.deflate(new TextEncoder().encode(message));
+      const cipherBuffer = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, compressed);
+
+      const full = new Uint8Array(MAGIC.length + 1 + salt.length + iv.length + cipherBuffer.byteLength);
+
+      let offset = 0;
+      full.set(MAGIC, offset); offset += MAGIC.length;
+      full[offset++] = VERSION;
+      full.set(salt, offset); offset += salt.length;
+      full.set(iv, offset); offset += iv.length;
+      full.set(new Uint8Array(cipherBuffer), offset);
+
+      return { full };
+    }
+
+    function showError(msg) {
+      const el = document.getElementById("error");
+      el.style.color = "red";
+      el.textContent = msg;
+    }
+    function showSuccess(msg) {
+      const el = document.getElementById("error");
+      el.style.color = "green";
+      el.textContent = msg;
+      setTimeout(() => { el.textContent = ""; }, 2000);
+    }
+    function clearMsg() {
+      document.getElementById("error").textContent = "";
+    }
+  </script>
+</body>
+</html>
