@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>AES-GCM 加密/解密工具</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f5f7fa;
+      color: #333;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      min-height: 100vh;
+      margin: 0;
+      padding: 40px;
+    }
+    .container {
+      background: #fff;
+      border-radius: 8px;
+      padding: 30px 40px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+      max-width: 700px;
+      width: 100%;
+    }
+    h2 {
+      text-align: center;
+      margin-bottom: 20px;
+      color: #444;
+    }
+    input, textarea, button {
+      width: 100%;
+      padding: 10px 12px;
+      margin: 10px 0;
+      font-size: 14px;
+      border-radius: 6px;
+      border: 1px solid #ccc;
+      box-sizing: border-box;
+    }
+    textarea {
+      resize: vertical;
+      font-family: monospace;
+    }
+    button {
+      background: #4a90e2;
+      color: white;
+      border: none;
+      cursor: pointer;
+      transition: background 0.3s;
+      margin-top: 5px;
+    }
+    button:hover {
+      background: #357ab7;
+    }
+    .section {
+      margin-top: 25px;
+    }
+    .label {
+      font-weight: bold;
+      margin-top: 15px;
+      display: block;
+    }
+    .error {
+      color: red;
+      font-size: 13px;
+      margin-top: 5px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>🔐 AES-GCM 加密/解密工具</h2>
+
+    <input id="password" type="password" placeholder="输入口令">
+
+    <div class="section">
+      <span class="label">明文（待加密）：</span>
+      <textarea id="message" rows="4" placeholder="输入要加密的文字"></textarea>
+      <button onclick="encryptMessage()">加密</button>
+      <span class="label">加密结果（Base64 密文）：</span>
+      <textarea id="cipher" rows="6" readonly></textarea>
+      <button onclick="copyToClipboard('cipher')">复制密文</button>
+    </div>
+
+    <div class="section">
+      <span class="label">解密（粘贴密文）：</span>
+      <textarea id="cipherInput" rows="6" placeholder="粘贴密文"></textarea>
+      <button onclick="decryptMessage()">解密</button>
+      <span class="label">解密结果：</span>
+      <textarea id="plain" rows="4" readonly></textarea>
+    </div>
+
+    <div class="error" id="error"></div>
+  </div>
+
+  <script>
+    // --- Base64 编解码（避免大数据溢出） ---
+    function arrayBufferToBase64(buffer) {
+      let binary = '';
+      const bytes = new Uint8Array(buffer);
+      const chunkSize = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+      }
+      return btoa(binary);
+    }
+
+    function base64ToArrayBuffer(base64) {
+      const binary = atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return bytes.buffer;
+    }
+
+    // --- 生成密钥 ---
+    async function getKey(password, salt) {
+      const pwUtf8 = new TextEncoder().encode(password);
+      const pwKey = await crypto.subtle.importKey(
+        "raw", pwUtf8, {name: "PBKDF2"}, false, ["deriveKey"]
+      );
+      return crypto.subtle.deriveKey(
+        { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
+        pwKey,
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"]
+      );
+    }
+
+    // --- 加密 ---
+    async function encryptMessage() {
+      clearError();
+      const password = document.getElementById("password").value;
+      const message = document.getElementById("message").value;
+      if (!password || !message) return showError("请输入口令和明文！");
+
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const key = await getKey(password, salt);
+
+      const cipherBuffer = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv },
+        key,
+        new TextEncoder().encode(message)
+      );
+
+      const full = new Uint8Array(salt.length + iv.length + cipherBuffer.byteLength);
+      full.set(salt);
+      full.set(iv, salt.length);
+      full.set(new Uint8Array(cipherBuffer), salt.length + iv.length);
+
+      document.getElementById("cipher").value = arrayBufferToBase64(full);
+    }
+
+    // --- 解密 ---
+    async function decryptMessage() {
+      clearError();
+      const password = document.getElementById("password").value;
+      const cipherText = document.getElementById("cipherInput").value.trim();
+      if (!password || !cipherText) return showError("请输入口令和密文！");
+
+      try {
+        const full = new Uint8Array(base64ToArrayBuffer(cipherText));
+        const salt = full.slice(0, 16);
+        const iv = full.slice(16, 28);
+        const cipherBytes = full.slice(28);
+
+        const key = await getKey(password, salt);
+        const plainBuffer = await crypto.subtle.decrypt(
+          { name: "AES-GCM", iv },
+          key,
+          cipherBytes
+        );
+
+        document.getElementById("plain").value = new TextDecoder().decode(plainBuffer);
+      } catch (e) {
+        showError("❌ 解密失败：口令不正确或数据损坏！");
+      }
+    }
+
+    // --- 工具函数 ---
+    function copyToClipboard(id) {
+      const text = document.getElementById(id).value;
+      if (!text) return showError("没有内容可复制！");
+      navigator.clipboard.writeText(text).then(
+        () => alert("✅ 已复制到剪贴板！"),
+        () => showError("复制失败，请手动复制。")
+      );
+    }
+
+    function showError(msg) {
+      document.getElementById("error").textContent = msg;
+    }
+
+    function clearError() {
+      document.getElementById("error").textContent = "";
+    }
+  </script>
+</body>
+</html>
