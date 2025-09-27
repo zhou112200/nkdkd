@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>YOLOv5-tfjs 物体识别 Demo</title>
+  <!-- TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
+  <!-- YOLOv5-tfjs 模型 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/yolo"></script>
+  <style>
+    body { text-align: center; font-family: sans-serif; }
+    video, canvas { border: 1px solid #ccc; margin-top: 10px; }
+    #status { margin-top: 10px; font-weight: bold; color: #444; }
+  </style>
+</head>
+<body>
+  <h1>📷 YOLOv5-tfjs 物体识别</h1>
+  <video id="webcam" autoplay playsinline muted width="400" height="300"></video>
+  <canvas id="canvas" width="400" height="300"></canvas>
+  <p id="status">⏳ 正在加载模型，请稍候...</p>
+
+  <script>
+    const video = document.getElementById("webcam");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const statusEl = document.getElementById("status");
+    let model;
+
+    async function init() {
+      try {
+        // 请求后置摄像头
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" }
+        });
+        video.srcObject = stream;
+
+        // 加载 YOLO 模型
+        model = await yolo.load();
+        statusEl.textContent = "✅ 模型加载完成，正在识别...";
+
+        // 开始识别
+        requestAnimationFrame(detectFrame);
+      } catch (err) {
+        console.error("摄像头或模型加载失败:", err);
+        statusEl.textContent = "❌ 出错: " + err.message;
+      }
+    }
+
+    async function detectFrame() {
+      if (!model) return;
+
+      // 绘制摄像头画面
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // 识别物体
+      const predictions = await model.detect(video);
+
+      // 显示结果
+      predictions.forEach(p => {
+        ctx.strokeStyle = "red";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(...p.bbox);
+        ctx.font = "14px Arial";
+        ctx.fillStyle = "red";
+        ctx.fillText(
+          `${p.class} (${(p.score * 100).toFixed(1)}%)`,
+          p.bbox[0],
+          p.bbox[1] > 10 ? p.bbox[1] - 5 : 10
+        );
+      });
+
+      requestAnimationFrame(detectFrame); // 下一帧继续
+    }
+
+    init();
+  </script>
+</body>
+</html>
