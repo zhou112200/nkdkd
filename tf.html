@@ -1,50 +1,59 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh">
 <head>
   <meta charset="UTF-8">
-  <title>物体识别 - tf.js</title>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+  <title>MobileNet 实时图像分类 Demo</title>
+  <!-- TensorFlow.js -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.10.0"></script>
+  <!-- MobileNet 模型 -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet"></script>
   <style>
     body { text-align: center; font-family: sans-serif; }
-    video, canvas { border: 1px solid #ccc; }
+    video { border: 1px solid #ccc; margin-top: 10px; }
+    #result { margin-top: 15px; font-size: 18px; font-weight: bold; color: #333; }
   </style>
 </head>
 <body>
-  <h1>📷 物体识别 Demo (tf.js)</h1>
+  <h1>📷 MobileNet 实时分类</h1>
   <video id="webcam" autoplay playsinline muted width="400" height="300"></video>
-  <canvas id="canvas" width="400" height="300"></canvas>
-  <p>请允许访问摄像头</p>
+  <div id="result">⏳ 正在加载模型...</div>
 
   <script>
-    const video = document.getElementById('webcam');
-    const canvas = document.getElementById('canvas');
-    const ctx = canvas.getContext('2d');
+    const video = document.getElementById("webcam");
+    const resultEl = document.getElementById("result");
+    let model;
+
+    async function setupCamera() {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" } // 默认用后置摄像头
+      });
+      video.srcObject = stream;
+      return new Promise(resolve => {
+        video.onloadedmetadata = () => resolve(video);
+      });
+    }
 
     async function init() {
-      // 请求摄像头权限
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      video.srcObject = stream;
+      try {
+        await setupCamera();
+        model = await mobilenet.load();
+        resultEl.textContent = "✅ 模型加载完成，正在识别...";
+        detectFrame();
+      } catch (err) {
+        console.error(err);
+        resultEl.textContent = "❌ 出错：" + err.message;
+      }
+    }
 
-      // 加载模型
-      const model = await cocoSsd.load();
+    async function detectFrame() {
+      if (!model) return;
+      const predictions = await model.classify(video);
 
-      // 循环检测
-      video.addEventListener('loadeddata', () => {
-        setInterval(async () => {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const predictions = await model.detect(video);
-          predictions.forEach(p => {
-            // 画框
-            ctx.strokeStyle = "red";
-            ctx.lineWidth = 2;
-            ctx.strokeRect(...p.bbox);
-            ctx.font = "14px Arial";
-            ctx.fillStyle = "red";
-            ctx.fillText(`${p.class} (${(p.score*100).toFixed(1)}%)`, p.bbox[0], p.bbox[1] > 10 ? p.bbox[1] - 5 : 10);
-          });
-        }, 300);
-      });
+      resultEl.innerHTML = predictions.map(
+        p => `${p.className} (${(p.probability * 100).toFixed(1)}%)`
+      ).join("<br>");
+
+      requestAnimationFrame(detectFrame); // 下一帧继续
     }
 
     init();
