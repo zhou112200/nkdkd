@@ -1,0 +1,845 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local ONNX GPT 推理 (上传版) - 增强修复版</title>
+    
+    <!-- 引入 ONNX Runtime Web -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.0/dist/ort.min.js"></script>
+    
+    <!-- 引入 Transformers.js (用于Tokenizer) -->
+    <script src="https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', 'Microsoft YaHei', Arial, sans-serif;
+            margin: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+        }
+        
+        h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+        
+        .subtitle {
+            color: #666;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+        
+        .alert {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        
+        .alert-info {
+            background-color: #e3f2fd;
+            color: #1976d2;
+            border-left: 4px solid #2196f3;
+        }
+        
+        .alert-warning {
+            background-color: #fff8e1;
+            color: #ff9800;
+            border-left: 4px solid #ffc107;
+        }
+        
+        .alert-error {
+            background-color: #ffebee;
+            color: #c62828;
+            border-left: 4px solid #f44336;
+            display: none;
+        }
+        
+        .alert-success {
+            background-color: #e8f5e9;
+            color: #2e7d32;
+            border-left: 4px solid #4caf50;
+            display: none;
+        }
+        
+        #statusMessage {
+            color: #1976d2;
+            font-weight: 500;
+            margin-bottom: 20px;
+            min-height: 24px;
+        }
+        
+        #uploadSection, #inferenceSection {
+            display: none;
+        }
+        
+        .file-upload {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border: 2px dashed #e0e0e0;
+            transition: all 0.3s;
+        }
+        
+        .file-upload:hover {
+            border-color: #2196f3;
+            background: #e3f2fd;
+        }
+        
+        .file-upload label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 500;
+            font-size: 14px;
+        }
+        
+        .file-upload input[type="file"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        
+        .file-upload input[type="file"]:hover {
+            border-color: #2196f3;
+        }
+        
+        .btn {
+            width: 100%;
+            padding: 14px 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 10px;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+        }
+        
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+        
+        .btn-secondary {
+            background: #6c757d;
+        }
+        
+        .btn-secondary:hover {
+            background: #5a6268;
+            box-shadow: none;
+        }
+        
+        .btn-success {
+            background: #28a745;
+        }
+        
+        .btn-success:hover {
+            background: #218838;
+            box-shadow: 0 4px 15px rgba(40, 167, 69, 0.4);
+        }
+        
+        #progressContainer {
+            width: 100%;
+            background-color: #e0e0e0;
+            border-radius: 10px;
+            margin: 20px 0;
+            overflow: hidden;
+            display: none;
+        }
+        
+        #progressBar {
+            height: 24px;
+            background: linear-gradient(90deg, #4caf50 0%, #8bc34a 100%);
+            text-align: center;
+            line-height: 24px;
+            color: white;
+            font-weight: 600;
+            font-size: 12px;
+            transition: width 0.3s ease;
+        }
+        
+        .input-group {
+            margin-bottom: 20px;
+        }
+        
+        .input-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+            font-size: 14px;
+        }
+        
+        #promptInput {
+            width: 100%;
+            padding: 14px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            font-family: inherit;
+            transition: border-color 0.3s;
+        }
+        
+        #promptInput:focus {
+            outline: none;
+            border-color: #2196f3;
+            box-shadow: 0 0 0 3px rgba(33, 150, 243, 0.1);
+        }
+        
+        #generatedText {
+            background: #f8f9fa;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            min-height: 100px;
+            font-size: 16px;
+            line-height: 1.8;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            color: #333;
+            margin-top: 10px;
+            transition: border-color 0.3s;
+        }
+        
+        #generatedText.generating {
+            border-color: #ffc107;
+            animation: pulse 1.5s infinite;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(255, 193, 7, 0.4); }
+            50% { box-shadow: 0 0 0 8px rgba(255, 193, 7, 0); }
+        }
+        
+        .loading-dots {
+            display: inline-block;
+        }
+        
+        .loading-dots::after {
+            content: '.';
+            animation: dots 1.5s steps(5, end) infinite;
+        }
+        
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60% { content: '...'; }
+            80%, 100% { content: ''; }
+        }
+        
+        .section-title {
+            font-size: 20px;
+            color: #333;
+            margin: 30px 0 15px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #667eea;
+        }
+        
+        .file-info {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+            font-style: italic;
+        }
+        
+        .model-info {
+            background: #e3f2fd;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            font-size: 14px;
+            color: #1976d2;
+        }
+        
+        .token-display {
+            font-family: 'Courier New', monospace;
+            background: #f5f5f5;
+            padding: 4px 8px;
+            border-radius: 4px;
+            display: inline-block;
+            margin: 2px;
+            font-size: 12px;
+        }
+        
+        .hidden {
+            display: none !important;
+        }
+        
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+                margin: 10px;
+            }
+            
+            h1 {
+                font-size: 24px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Local ONNX GPT 推理</h1>
+        <p class="subtitle">在浏览器中本地运行 GPT 模型 · 无需联网 · 保护隐私</p>
+        
+        <div class="alert alert-info">
+            <strong>ℹ️ 使用说明：</strong><br>
+            1. 上传 ONNX 模型文件（推荐使用 <strong>单文件格式</strong>，不含外部 .data 文件）<br>
+            2. 上传分词器文件 <code>tokenizer.json</code><br>
+            3. 输入提示词，点击"开始推理"生成文本
+        </div>
+        
+        <div class="alert alert-warning">
+            <strong>⚠️ 重要提示：</strong><br>
+            • 如果模型包含外部数据（.data 文件），需要将模型转换为 <strong>单文件格式</strong> 才能在浏览器中使用<br>
+            • 首次加载模型可能需要较长时间（取决于模型大小和设备性能）<br>
+            • 推荐使用支持 WebGPU 的现代浏览器（Chrome/Edge）以获得最佳性能
+        </div>
+        
+        <div class="alert alert-error" id="errorMessage"></div>
+        <div class="alert alert-success" id="successMessage"></div>
+        
+        <div id="statusMessage">正在初始化...</div>
+        
+        <div id="uploadSection">
+            <div class="section-title">📁 上传模型文件</div>
+            
+            <div class="file-upload">
+                <label for="onnxFile">ONNX 模型文件 (.onnx) <span style="color: #f44336">*</span></label>
+                <input type="file" id="onnxFile" accept=".onnx" />
+                <div class="file-info">• 推荐使用单文件格式（内嵌权重）<br>• 文件大小通常为几十MB到几百MB</div>
+            </div>
+            
+            <div class="file-upload">
+                <label for="tokenizerJsonFile">分词器文件 (tokenizer.json) <span style="color: #f44336">*</span></label>
+                <input type="file" id="tokenizerJsonFile" accept=".json" />
+                <div class="file-info">• 包含词汇表和分词规则<br>• 通常大小为1-5MB</div>
+            </div>
+            
+            <button class="btn" id="loadBtn" onclick="loadModelAndTokenizer()">🚀 加载模型和分词器</button>
+            
+            <div class="model-info" id="modelInfo" style="display: none;">
+                <strong>模型信息：</strong><br>
+                <span id="modelFileName">-</span><br>
+                <span id="modelFileSize">-</span>
+            </div>
+        </div>
+        
+        <div id="progressContainer">
+            <div id="progressBar">0%</div>
+        </div>
+        
+        <div id="inferenceSection">
+            <div class="section-title">💬 输入提示词</div>
+            
+            <div class="input-group">
+                <label for="promptInput">输入您的提示词：</label>
+                <input type="text" id="promptInput" placeholder="例如: Once upon a time there was a" />
+            </div>
+            
+            <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                <div style="flex: 1;">
+                    <label for="maxTokens">生成长度：</label>
+                    <input type="number" id="maxTokens" min="1" max="100" value="20" 
+                           style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;" />
+                </div>
+                <div style="flex: 1;">
+                    <label for="temperature">Temperature：</label>
+                    <input type="number" id="temperature" min="0.1" max="2.0" step="0.1" value="0.7" 
+                           style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px;" />
+                </div>
+            </div>
+            
+            <button class="btn" onclick="runInference()">✨ 生成文本</button>
+            <button class="btn btn-secondary" onclick="resetPage()" style="margin-top: 10px;">🔄 重新上传模型</button>
+            
+            <div class="section-title">📝 生成结果</div>
+            <div id="generatedText" class="output">输入提示词后点击"生成文本"</div>
+            
+            <div style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px; font-size: 14px;">
+                <strong>📊 推理信息：</strong><br>
+                <span id="inferenceInfo">-</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ========== 全局变量 ==========
+        let session = null;
+        let tokenizer = null;
+        let modelArrayBuffer = null;
+        let tokenizerJsonStr = null;
+        let isModelLoaded = false;
+        let modelName = '';
+        let modelSize = 0;
+        
+        // ========== 页面初始化 ==========
+        window.addEventListener('DOMContentLoaded', () => {
+            const statusMessage = document.getElementById('statusMessage');
+            statusMessage.textContent = "✅ 准备就绪，请上传模型文件...";
+            
+            // 显示上传区域
+            document.getElementById('uploadSection').style.display = 'block';
+            
+            // 文件选择监听
+            document.getElementById('onnxFile').addEventListener('change', updateFileInfo);
+        });
+        
+        // ========== 文件信息更新 ==========
+        function updateFileInfo() {
+            const onnxFileInput = document.getElementById('onnxFile');
+            const modelInfo = document.getElementById('modelInfo');
+            
+            if (onnxFileInput.files && onnxFileInput.files[0]) {
+                const file = onnxFileInput.files[0];
+                modelName = file.name;
+                modelSize = file.size;
+                
+                document.getElementById('modelFileName').textContent = `文件名: ${file.name}`;
+                document.getElementById('modelFileSize').textContent = `文件大小: ${(file.size / 1024 / 1024).toFixed(2)} MB`;
+                modelInfo.style.display = 'block';
+            }
+        }
+        
+        // ========== 格式化文件大小 ==========
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
+            return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+        }
+        
+        // ========== 更新进度条 ==========
+        function updateProgress(percent, message) {
+            const progressBar = document.getElementById('progressBar');
+            const progressContainer = document.getElementById('progressContainer');
+            const statusMessage = document.getElementById('statusMessage');
+            
+            progressBar.style.width = percent + '%';
+            progressBar.textContent = percent + '%';
+            statusMessage.textContent = message;
+            progressContainer.style.display = 'block';
+        }
+        
+        // ========== 显示错误 ==========
+        function showError(message) {
+            const errorMessage = document.getElementById('errorMessage');
+            errorMessage.textContent = '❌ ' + message;
+            errorMessage.style.display = 'block';
+            
+            // 3秒后自动隐藏
+            setTimeout(() => {
+                errorMessage.style.display = 'none';
+            }, 5000);
+        }
+        
+        // ========== 显示成功 ==========
+        function showSuccess(message) {
+            const successMessage = document.getElementById('successMessage');
+            successMessage.textContent = '✅ ' + message;
+            successMessage.style.display = 'block';
+            
+            // 3秒后自动隐藏
+            setTimeout(() => {
+                successMessage.style.display = 'none';
+            }, 3000);
+        }
+        
+        // ========== 加载模型和分词器 ==========
+        async function loadModelAndTokenizer() {
+            const statusMessage = document.getElementById('statusMessage');
+            const loadBtn = document.getElementById('loadBtn');
+            const uploadSection = document.getElementById('uploadSection');
+            
+            // 隐藏错误和成功消息
+            document.getElementById('errorMessage').style.display = 'none';
+            document.getElementById('successMessage').style.display = 'none';
+            
+            // 获取文件输入
+            const onnxFile = document.getElementById('onnxFile').files[0];
+            const tokenizerJsonFile = document.getElementById('tokenizerJsonFile').files[0];
+            
+            if (!onnxFile) {
+                showError("请上传 ONNX 模型文件！");
+                return;
+            }
+            
+            if (!tokenizerJsonFile) {
+                showError("请上传分词器文件 (tokenizer.json)！");
+                return;
+            }
+            
+            // 禁用按钮
+            loadBtn.disabled = true;
+            loadBtn.textContent = "⏳ 加载中...";
+            
+            try {
+                // ========== 读取 ONNX 模型文件 ==========
+                updateProgress(10, "正在读取模型文件...");
+                modelArrayBuffer = await readFileAsArrayBuffer(onnxFile);
+                updateProgress(30, "模型文件读取完成");
+                
+                // ========== 读取 Tokenizer JSON ==========
+                updateProgress(40, "正在读取分词器文件...");
+                tokenizerJsonStr = await readFileAsText(tokenizerJsonFile);
+                updateProgress(60, "分词器文件读取完成");
+                
+                // ========== 初始化 Tokenizer ==========
+                updateProgress(65, "正在初始化分词器...");
+                await initializeTokenizer();
+                updateProgress(75, "分词器初始化完成");
+                
+                // ========== 加载 ONNX 模型 ==========
+                updateProgress(80, "正在加载模型（这可能需要一会儿）...");
+                await initializeModel();
+                updateProgress(95, "模型加载完成");
+                
+                // ========== 完成 ==========
+                setTimeout(() => {
+                    updateProgress(100, "✅ 模型和分词器加载完成！");
+                    
+                    // 隐藏上传区域，显示推理区域
+                    uploadSection.style.display = 'none';
+                    document.getElementById('inferenceSection').style.display = 'block';
+                    document.getElementById('progressContainer').style.display = 'none';
+                    
+                    // 聚焦输入框
+                    document.getElementById('promptInput').focus();
+                    
+                    showSuccess("🎉 模型加载成功！现在可以输入提示词进行推理了。");
+                    
+                    isModelLoaded = true;
+                    loadBtn.disabled = false;
+                    loadBtn.textContent = "🚀 加载模型和分词器";
+                }, 500);
+                
+            } catch (error) {
+                console.error("加载失败:", error);
+                showError("加载失败: " + error.message);
+                statusMessage.textContent = "❌ 加载失败，请检查文件格式";
+                document.getElementById('progressContainer').style.display = 'none';
+                loadBtn.disabled = false;
+                loadBtn.textContent = "🚀 加载模型和分词器";
+            }
+        }
+        
+        // ========== 读取文件为 ArrayBuffer ==========
+        function readFileAsArrayBuffer(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = (e) => reject(new Error("读取文件失败: " + e.target.error));
+                reader.readAsArrayBuffer(file);
+            });
+        }
+        
+        // ========== 读取文件为文本 ==========
+        function readFileAsText(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = (e) => reject(new Error("读取文件失败: " + e.target.error));
+                reader.readAsText(file);
+            });
+        }
+        
+        // ========== 初始化 Tokenizer ==========
+        async function initializeTokenizer() {
+            try {
+                // 使用 Transformers.js 的 AutoTokenizer
+                // 它会自动解析 tokenizer.json 并创建正确的 tokenizer
+                console.log("正在初始化分词器...");
+                
+                // 创建一个 Blob URL 用于加载 tokenizer
+                const blob = new Blob([tokenizerJsonStr], { type: 'application/json' });
+                const tokenizerUrl = URL.createObjectURL(blob);
+                
+                // 使用 Transformers.js 加载 tokenizer
+                tokenizer = await window.Transformers.AutoTokenizer.from_pretrained(tokenizerUrl);
+                
+                // 释放 Blob URL
+                URL.revokeObjectURL(tokenizerUrl);
+                
+                console.log("✅ Tokenizer 初始化成功:", tokenizer);
+                console.log("  - 词汇表大小:", tokenizer.vocab_size);
+                console.log("  - 模型类型:", tokenizer.model);
+                
+            } catch (error) {
+                console.error("Tokenizer 初始化失败:", error);
+                
+                // 尝试降级方案：手动解析
+                try {
+                    const tokenizerJson = JSON.parse(tokenizerJsonStr);
+                    console.log("Tokenizer JSON:", tokenizerJson);
+                    
+                    throw new Error("Tokenizer 初始化失败，请确保 tokenizer.json 格式正确");
+                } catch (parseError) {
+                    throw new Error("分词器文件解析失败: " + parseError.message);
+                }
+            }
+        }
+        
+        // ========== 初始化 ONNX 模型 ==========
+        async function initializeModel() {
+            try {
+                console.log("正在加载 ONNX 模型...");
+                console.log("  - 模型大小:", formatFileSize(modelArrayBuffer.byteLength));
+                
+                // 配置 ONNX Runtime 会话选项
+                const sessionOptions = {
+                    // 执行提供者：优先使用 WebGPU（如果可用），否则使用 WASM
+                    executionProviders: ['wasm'], // 先用 WASM 确保兼容性
+                    // 图优化级别
+                    graphOptimizationLevel: 'all',
+                    // 日志级别
+                    logSeverityLevel: 3, // 3 = Warning, 4 = Info
+                };
+                
+                // 尝试启用 WebGPU（如果环境支持）
+                if (typeof navigator !== 'undefined' && navigator.gpu) {
+                    console.log("检测到 WebGPU 支持，尝试使用 WebGPU 执行");
+                    sessionOptions.executionProviders = ['webgpu', 'wasm'];
+                } else {
+                    console.log("未检测到 WebGPU，使用 WASM 执行");
+                }
+                
+                // 创建推理会话
+                // 注意：使用 ort.InferenceSession.create() 而不是 new ort.InferenceSession()
+                session = await ort.InferenceSession.create(modelArrayBuffer, sessionOptions);
+                
+                console.log("✅ ONNX 模型加载成功");
+                console.log("  - 输入:", session.inputNames);
+                console.log("  - 输出:", session.outputNames);
+                console.log("  - 执行提供者:", session.executionProviders);
+                
+                // 验证模型输入输出
+                if (!session.inputNames || session.inputNames.length === 0) {
+                    throw new Error("模型没有有效的输入节点");
+                }
+                
+            } catch (error) {
+                console.error("ONNX 模型加载失败:", error);
+                
+                // 提供更友好的错误信息
+                if (error.message.includes('external data')) {
+                    throw new Error(
+                        '模型包含外部数据文件(.data)，请将模型转换为单文件格式。\n' +
+                        '转换方法：使用 onnxruntime.tools.convert_onnx_models_to_external_data 工具'
+                    );
+                }
+                
+                if (error.message.includes('WebGPU')) {
+                    console.warn("WebGPU 初始化失败，降级到 WASM");
+                    // 重试使用 WASM
+                    const sessionOptions = {
+                        executionProviders: ['wasm'],
+                        graphOptimizationLevel: 'all'
+                    };
+                    session = await ort.InferenceSession.create(modelArrayBuffer, sessionOptions);
+                    console.log("✅ 使用 WASM 成功加载模型");
+                } else {
+                    throw error;
+                }
+            }
+        }
+        
+        // ========== 运行推理 ==========
+        async function runInference() {
+            if (!isModelLoaded || !session || !tokenizer) {
+                alert("模型或分词器未加载完成！");
+                return;
+            }
+            
+            const promptInput = document.getElementById('promptInput').value.trim();
+            const maxTokens = parseInt(document.getElementById('maxTokens').value) || 20;
+            const temperature = parseFloat(document.getElementById('temperature').value) || 0.7;
+            
+            if (!promptInput) {
+                alert("请输入提示词！");
+                return;
+            }
+            
+            const generatedTextDiv = document.getElementById('generatedText');
+            const inferenceInfoDiv = document.getElementById('inferenceInfo');
+            
+            // 显示加载状态
+            generatedTextDiv.textContent = "正在生成";
+            generatedTextDiv.classList.add('generating');
+            generatedTextDiv.innerHTML = '🧠 正在生成' + '<span class="loading-dots"></span>';
+            
+            const startTime = performance.now();
+            
+            try {
+                console.log("========== 推理开始 ==========");
+                console.log("提示词:", promptInput);
+                console.log("最大生成长度:", maxTokens);
+                console.log("Temperature:", temperature);
+                
+                // ========== 编码输入 ==========
+                console.log("正在编码输入...");
+                const encoded = tokenizer.encode(promptInput, { add_special_tokens: true });
+                console.log("编码结果:", encoded);
+                console.log("Token ID:", encoded.tolist());
+                
+                // ========== 自回归生成 ==========
+                let inputIds = encoded.tolist();
+                let generatedTokens = [];
+                let generatedText = promptInput;
+                
+                console.log("开始自回归生成...");
+                
+                for (let i = 0; i < maxTokens; i++) {
+                    // 准备输入张量
+                    const inputTensor = new ort.Tensor(
+                        'int64',
+                        BigInt64Array.from(inputIds.map(n => BigInt(n))),
+                        [1, inputIds.length]
+                    );
+                    
+                    // 运行推理
+                    const feeds = { input_ids: inputTensor };
+                    const results = await session.run(feeds);
+                    
+                    // 获取 logits
+                    const logits = results.logits;
+                    const logitsData = logits.data;
+                    const vocabSize = logits.dims[logits.dims.length - 1];
+                    
+                    // 获取最后一个 token 的 logits
+                    const lastTokenLogits = logitsData.slice(-vocabSize);
+                    
+                    // 应用 temperature
+                    const scaledLogits = lastTokenLogits.map(logit => logit / temperature);
+                    
+                    // 使用 softmax 采样
+                    const nextTokenId = sampleFromLogits(scaledLogits);
+                    
+                    // 检查是否为结束符（通常为 eos_token_id）
+                    const eosTokenId = tokenizer.eos_token_id || 50256; // GPT-2 的 eos token
+                    if (nextTokenId === eosTokenId && i > 0) {
+                        console.log("检测到结束符，停止生成");
+                        break;
+                    }
+                    
+                    // 添加到输入序列
+                    inputIds.push(nextTokenId);
+                    generatedTokens.push(nextTokenId);
+                    
+                    // 解码并更新显示
+                    const currentText = tokenizer.decode(generatedTokens, { skip_special_tokens: true });
+                    generatedTextDiv.innerHTML = `<strong>${promptInput}</strong>${currentText}`;
+                    
+                    // 小延迟以更新UI
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                }
+                
+                // ========== 完成 ==========
+                const endTime = performance.now();
+                const elapsedTime = ((endTime - startTime) / 1000).toFixed(2);
+                const tokensPerSecond = (generatedTokens.length / (endTime - startTime) * 1000).toFixed(1);
+                
+                generatedTextDiv.classList.remove('generating');
+                inferenceInfoDiv.innerHTML = `
+                    生成 Token 数: ${generatedTokens.length}<br>
+                    耗时: ${elapsedTime} 秒<br>
+                    速度: ${tokensPerSecond} tokens/秒
+                `;
+                
+                console.log("========== 推理完成 ==========");
+                console.log("生成的 Token:", generatedTokens);
+                console.log("生成的文本:", generatedText);
+                console.log("耗时:", elapsedTime, "秒");
+                
+            } catch (error) {
+                console.error("推理失败:", error);
+                generatedTextDiv.classList.remove('generating');
+                generatedTextDiv.innerHTML = `❌ 推理失败: ${error.message}<br><br>详细信息: ${error.toString()}`;
+                inferenceInfoDiv.textContent = "-";
+            }
+        }
+        
+        // ========== 从 logits 采样 ==========
+        function sampleFromLogits(logits) {
+            // 计算 softmax
+            const maxLogit = Math.max(...logits);
+            const expLogits = logits.map(logit => Math.exp(logit - maxLogit));
+            const sumExpLogits = expLogits.reduce((a, b) => a + b, 0);
+            const probs = expLogits.map(expLogit => expLogit / sumExpLogits);
+            
+            // 采样
+            const rand = Math.random();
+            let cumProb = 0;
+            for (let i = 0; i < probs.length; i++) {
+                cumProb += probs[i];
+                if (rand < cumProb) {
+                    return i;
+                }
+            }
+            
+            // 降级：返回最高概率的 token
+            return probs.indexOf(Math.max(...probs));
+        }
+        
+        // ========== 重置页面 ==========
+        function resetPage() {
+            // 重置状态
+            isModelLoaded = false;
+            session = null;
+            tokenizer = null;
+            modelArrayBuffer = null;
+            tokenizerJsonStr = null;
+            
+            // 显示上传区域，隐藏推理区域
+            document.getElementById('uploadSection').style.display = 'block';
+            document.getElementById('inferenceSection').style.display = 'none';
+            
+            // 重置输入
+            document.getElementById('onnxFile').value = '';
+            document.getElementById('tokenizerJsonFile').value = '';
+            document.getElementById('promptInput').value = '';
+            document.getElementById('generatedText').textContent = '输入提示词后点击"生成文本"';
+            document.getElementById('inferenceInfo').textContent = '-';
+            document.getElementById('modelInfo').style.display = 'none';
+            
+            // 显示状态
+            document.getElementById('statusMessage').textContent = "✅ 准备就绪，请上传模型文件...";
+            document.getElementById('errorMessage').style.display = 'none';
+            document.getElementById('successMessage').style.display = 'none';
+        }
+    </script>
+</body>
+</html>
