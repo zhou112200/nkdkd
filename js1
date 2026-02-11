@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>ONNX 模型加载（含.data）</title>
+</head>
+<body>
+    <h1>ONNX 模型加载</h1>
+    
+    <div>
+        <p>上传 .onnx 文件: <input type="file" id="onnxFile"></p>
+        <p>上传 .data 文件: <input type="file" id="dataFile"></p>
+        <p>上传 tokenizer.json: <input type="file" id="tokenizerFile"></p>
+        <button onclick="load()">加载</button>
+    </div>
+    
+    <div id="status">状态: 未加载</div>
+    <div id="error" style="color:red;"></div>
+    
+    <div id="inference" style="display:none;">
+        <p>提示词: <input type="text" id="prompt" value="Hello world"></p>
+        <button onclick="run()">生成</button>
+        <div id="output"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.0/dist/ort.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2"></script>
+    
+    <script>
+        let session = null;
+        let tokenizer = null;
+        
+        async function load() {
+            const status = document.getElementById('status');
+            const error = document.getElementById('error');
+            error.textContent = '';
+            
+            const onnxFile = document.getElementById('onnxFile').files[0];
+            const dataFile = document.getElementById('dataFile').files[0];
+            const tokenizerFile = document.getElementById('tokenizerFile').files[0];
+            
+            if (!onnxFile || !tokenizerFile) {
+                error.textContent = '必须上传 .onnx 和 tokenizer.json';
+                return;
+            }
+            
+            status.textContent = '读取文件中...';
+            
+            // 读取 .onnx
+            const onnxArrayBuffer = await readFile(onnxFile);
+            
+            // 检查是否含外部数据引用
+            const hasExternal = checkExternalData(onnxArrayBuffer);
+            if (hasExternal && !dataFile) {
+                error.textContent = '错误: 模型包含外部数据(.data)，但未上传.data文件。浏览器无法直接使用含外部数据的模型。';
+                status.textContent = '加载失败';
+                showFixGuide();
+                return;
+            }
+            
+            // 读取 tokenizer
+            const tokenizerText = await readFile(tokenizerFile, 'text');
+            const tokenizerBlob = new Blob([tokenizerText], {type: 'application/json'});
+            const tokenizerUrl = URL.createObjectURL(tokenizerBlob);
+            tokenizer = await Transformers.AutoTokenizer.from_pretrained(tokenizerUrl);
+            URL.revokeObjectURL(tokenizerUrl);
+            
+            status.textContent = '加载模型中...（可能需要1分钟）';
+            
+            // 尝试加载模型
+            try {
+                session = await ort.InferenceSession.create(onnxArrayBuffer, {
+                    executionProviders: ['wasm']
+                });
+                
+                status.textContent = '✅ 加载成功! 输入节点: ' + session.inputNames.join(', ');
+                document.getElementById('inference').style.display = 'block';
+                
+            } catch (e) {
+                error.textContent = '加载失败: ' + e.message;
+                status.textContent = '❌ 加载失败';
+                
+                // 检查是否因为外部数据
+                if (e.message.includes('external') || e.message.includes('data')) {
+                    error.textContent += '\n\n原因: 浏览器无法加载含外部数据的模型。';
+                    showFixGuide();
+                }
+            }
+        }
+        
+        function checkExternalData(buf) {
+            const view = new Uint8Array(buf, 0, Math.min(10000, buf.byteLength));
+            const text = new TextDecoder().decode(view);
+            return text.includes('external_data') || text.includes('.data');
+        }
+        
+        async function run() {
+            const prompt = document.getElementById('prompt').value;
+            const output = document.getElementById('output');
+            output.textContent = '生成中...';
+            
+            try {
+                const encoded = tokenizer.encode(prompt, {add_special_tokens: true});
+                const inputIds = encoded.tolist();
+                
+                const tensor = new ort.Tensor(
+                    'int64',
+                    BigInt64Array.from(inputIds.map(n => BigInt(n))),
+                    [1, inputIds.length]
+                );
+                
+                const result = await session.run({input_ids: tensor});
+                const logits = result.logits.data;
+                const vocabSize = result.logits.dims[result.logits.dims.length - 1];
+                const lastLogits = logits.slice(-vocabSize);
+                
+                let maxIdx = 0;
+                let maxValue = -Infinity;
+                for (let i = 0; i < lastLogits.length; i++) {
+                    if (lastLogits[i] > maxValue) {
+                        maxValue = lastLogits[i];
+                        maxIdx = i;
+                    }
+                }
+                
+                const nextToken = tokenizer.decode([maxIdx], {skip_special_tokens: true});
+                output.textContent = prompt + nextToken;
+                
+            } catch (e) {
+                output.textContent = '错误: ' + e.message;
+            }
+        }
+        
+        function readFile(file, type = 'arraybuffer') {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = reject;
+                if (type === 'arraybuffer') reader.readAsArrayBuffer(file);
+                else reader.readAsText(file);
+            });
+        }
+        
+        function showFixGuide() {
+            const div = document.createElement('div');
+            div.innerHTML = '<h3>修复方法（必须做）:</h3>' +
+                '<p>1. 安装 Python 和 onnx: <code>pip install onnx</code></p>' +
+                '<p>2. 创建 convert.py:</p>' +
+                '<pre>import onnx\nmodel = onnx.load("gpt.onnx", load_external_data=True)\nonnx.save(model, "gpt_single.onnx", save_as_external_data=False)\nprint("完成")</pre>' +
+                '<p>3. 运行: <code>python convert.py</code></p>' +
+                '<p>4. 上传生成的 gpt_single.onnx（不再需要 .data 文件）</p>';
+            document.getElementById('error').appendChild(div);
+        }
+    </script>
+</body>
+</html>
