@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ONNX GPT 推理 - 诊断版</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.0/dist/ort.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2"></script>
+    
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', 'Microsoft YaHei', Arial, sans-serif;
+            margin: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 40px;
+        }
+        h1 { color: #333; font-size: 28px; margin-bottom: 10px; text-align: center; }
+        .subtitle { color: #666; text-align: center; margin-bottom: 30px; font-size: 14px; }
+        
+        .alert { padding: 12px 16px; border-radius: 8px; margin-bottom: 15px; font-size: 14px; }
+        .alert-info { background-color: #e3f2fd; color: #1976d2; border-left: 4px solid #2196f3; }
+        .alert-warning { background-color: #fff8e1; color: #ff9800; border-left: 4px solid #ffc107; }
+        .alert-error { background-color: #ffebee; color: #c62828; border-left: 4px solid #f44336; display: none; }
+        .alert-success { background-color: #e8f5e9; color: #2e7d32; border-left: 4px solid #4caf50; display: none; }
+        .alert-debug { background-color: #f3e5f5; color: #4a148c; border-left: 4px solid #9c27b0; font-family: 'Courier New', monospace; font-size: 13px; }
+        
+        #statusMessage {
+            color: #1976d2;
+            font-weight: 500;
+            margin-bottom: 20px;
+            min-height: 24px;
+            padding: 10px;
+            background: #f0f9ff;
+            border-radius: 6px;
+        }
+        
+        #uploadSection, #inferenceSection, #diagnosticSection {
+            display: none;
+        }
+        
+        .file-upload {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border: 2px dashed #e0e0e0;
+            transition: all 0.3s;
+        }
+        .file-upload:hover { border-color: #2196f3; background: #e3f2fd; }
+        .file-upload label { display: block; margin-bottom: 8px; color: #555; font-weight: 500; font-size: 14px; }
+        .file-upload input[type="file"] { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; cursor: pointer; }
+        
+        .btn {
+            width: 100%;
+            padding: 14px 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 10px;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6); }
+        .btn:disabled { background: #ccc; cursor: not-allowed; transform: none; box-shadow: none; }
+        .btn-secondary { background: #6c757d; }
+        .btn-secondary:hover { background: #5a6268; box-shadow: none; }
+        .btn-success { background: #28a745; }
+        .btn-success:hover { background: #218838; box-shadow: 0 4px 15px rgba(40, 167, 69, 0.4); }
+        .btn-danger { background: #dc3545; }
+        .btn-danger:hover { background: #c82333; box-shadow: 0 4px 15px rgba(220, 53, 69, 0.4); }
+        
+        #progressContainer {
+            width: 100%;
+            background-color: #e0e0e0;
+            border-radius: 10px;
+            margin: 20px 0;
+            overflow: hidden;
+            display: none;
+        }
+        #progressBar {
+            height: 24px;
+            background: linear-gradient(90deg, #4caf50 0%, #8bc34a 100%);
+            text-align: center;
+            line-height: 24px;
+            color: white;
+            font-weight: 600;
+            font-size: 12px;
+            transition: width 0.3s ease;
+        }
+        
+        .input-group { margin-bottom: 20px; }
+        .input-group label { display: block; margin-bottom: 8px; color: #333; font-weight: 500; font-size: 14px; }
+        #promptInput {
+            width: 100%;
+            padding: 14px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            font-family: inherit;
+            transition: border-color 0.3s;
+        }
+        #promptInput:focus {
+            outline: none;
+            border-color: #2196f3;
+            box-shadow: 0 0 0 3px rgba(33, 150, 243, 0.1);
+        }
+        
+        #generatedText {
+            background: #f8f9fa;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            min-height: 100px;
+            font-size: 16px;
+            line-height: 1.8;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            color: #333;
+            margin-top: 10px;
+            transition: border-color 0.3s;
+        }
+        
+        .section-title {
+            font-size: 20px;
+            color: #333;
+            margin: 30px 0 15px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #667eea;
+        }
+        
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        .tab-btn {
+            padding: 10px 20px;
+            background: #f0f0f0;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+        .tab-btn.active {
+            background: #667eea;
+            color: white;
+            border-bottom-color: #667eea;
+        }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        
+        .debug-console {
+            background: #1e1e1e;
+            color: #f0f0f0;
+            padding: 20px;
+            border-radius: 8px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            overflow-y: auto;
+            max-height: 400px;
+            margin-top: 15px;
+            line-height: 1.6;
+        }
+        .debug-console .log { color: #ccc; }
+        .debug-console .info { color: #4caf50; }
+        .debug-console .warn { color: #ff9800; }
+        .debug-console .error { color: #f44336; }
+        .debug-console .success { color: #8bc34a; }
+        
+        .compatibility-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .compat-item {
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            background: #f8f9fa;
+        }
+        .compat-item.ok { background: #e8f5e9; border-left: 4px solid #4caf50; }
+        .compat-item.warn { background: #fff8e1; border-left: 4px solid #ffc107; }
+        .compat-item.fail { background: #ffebee; border-left: 4px solid #f44336; }
+        .compat-item strong { display: block; font-size: 16px; margin-bottom: 5px; }
+        
+        .model-info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+        .info-card {
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+        }
+        .info-card strong { display: block; margin-bottom: 5px; color: #333; }
+        
+        @media (max-width: 768px) {
+            .container { padding: 20px; margin: 10px; }
+            h1 { font-size: 24px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 ONNX GPT 推理 - 诊断版</h1>
+        <p class="subtitle">实时调试 · 问题定位 · 一键修复</p>
+        
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('upload')">📤 上传模型</button>
+            <button class="tab-btn" onclick="switchTab('diagnostic')">🔍 诊断工具</button>
+            <button class="tab-btn" onclick="switchTab('inference')" id="inferenceTabBtn" disabled>💬 推理</button>
+        </div>
+        
+        <div id="uploadSection" class="tab-content active">
+            <div class="alert alert-info">
+                <strong>ℹ️ 使用说明：</strong><br>
+                1. 上传 ONNX 模型文件（推荐单文件格式）<br>
+                2. 上传分词器文件 <code>tokenizer.json</code><br>
+                3. 点击"诊断并加载"查看详细信息
+            </div>
+            
+            <div class="alert alert-warning">
+                <strong>⚠️ 常见问题：</strong><br>
+                • 如果加载失败，90% 原因是模型包含外部数据<br>
+                • Tokenizer 必须与模型训练时使用的完全一致
+            </div>
+            
+            <div class="alert alert-error" id="errorMessage"></div>
+            <div class="alert alert-success" id="successMessage"></div>
+            
+            <div id="statusMessage">✅ 准备就绪，请上传模型文件...</div>
+            
+            <div class="section-title">📁 上传模型文件</div>
+            
+            <div class="file-upload">
+                <label for="onnxFile">ONNX 模型文件 (.onnx) <span style="color: #f44336">*</span></label>
+                <input type="file" id="onnxFile" accept=".onnx" />
+                <div style="font-size: 12px; color: #666; margin-top: 5px; font-style: italic;">
+                    • 推荐单文件格式（内嵌权重）<br>
+                    • 文件大小：几十MB到几百MB
+                </div>
+            </div>
+            
+            <div class="file-upload">
+                <label for="tokenizerJsonFile">分词器文件 (tokenizer.json) <span style="color: #f44336">*</span></label>
+                <input type="file" id="tokenizerJsonFile" accept=".json" />
+                <div style="font-size: 12px; color: #666; margin-top: 5px; font-style: italic;">
+                    • 包含词汇表和分词规则
+                </div>
+            </div>
+            
+            <button class="btn" id="loadBtn" onclick="loadModelAndTokenizer()">🔍 诊断并加载</button>
+            
+            <div class="model-info-grid" id="modelInfoGrid" style="display: none;">
+                <div class="info-card">
+                    <strong>文件名</strong>
+                    <span id="modelFileName">-</span>
+                </div>
+                <div class="info-card">
+                    <strong>文件大小</strong>
+                    <span id="modelFileSize">-</span>
+                </div>
+                <div class="info-card">
+                    <strong>Tokenizer</strong>
+                    <span id="tokenizerStatus">-</span>
+                </div>
+            </div>
+        </div>
+        
+        <div id="diagnosticSection" class="tab-content">
+            <div class="section-title">🔧 系统诊断</div>
+            
+            <div class="alert alert-info">
+                <strong>💡 诊断信息：</strong><br>
+                以下信息可帮助定位问题。如果加载失败，请截图此页面并提供给开发者。
+            </div>
+            
+            <div class="compatibility-grid" id="compatibilityGrid">
+                <!-- 动态填充 -->
+            </div>
+            
+            <div class="section-title">📝 详细日志</div>
+            <div class="debug-console" id="debugConsole">
+                <div class="log">等待诊断...</div>
+            </div>
+            
+            <button class="btn btn-secondary" onclick="runCompatibilityCheck()" style="margin-top: 15px;">
+                🔄 重新检查兼容性
+            </button>
+            
+            <button class="btn btn-success" onclick="switchTab('upload')" style="margin-top: 10px;">
+                ← 返回上传
+            </button>
+        </div>
+        
+        <div id="inferenceSection" class="tab-content">
+            <div class="section-title">💬 输入提示词</div>
+            
+            <div class="input-group">
+                <label for="promptInput">输入您的提示词：</label>
+                <input type="text" id="promptInput" placeholder="例如: Once upon a time there was a" />
+            </div>
+            
+            <button class="btn" onclick="runInference()">✨ 生成文本</button>
+            
+            <div class="section-title">📝 生成结果</div>
+            <div id="generatedText">输入提示词后点击"生成文本"</div>
+            
+            <button class="btn btn-secondary" onclick="resetPage()" style="margin-top: 20px;">
+                🔄 重新上传模型
+            </button>
+        </div>
+        
+        <div id="progressContainer">
+            <div id="progressBar">0%</div>
+        </div>
+    </div>
+
+    <script>
+        // ========== 全局变量 ==========
+        let session = null;
+        let tokenizer = null;
+        let modelArrayBuffer = null;
+        let tokenizerJsonStr = null;
+        let isModelLoaded = false;
+        let debugLogs = [];
+        
+        // ========== 页面初始化 ==========
+        window.addEventListener('DOMContentLoaded', () => {
+            log("系统初始化...", "info");
+            log(`ONNX Runtime 版本: ${ort.version}`, "info");
+            log(`Transformers.js 版本: ${window.Transformers?.version || "未知"}`, "info");
+            
+            // 显示上传区域
+            document.getElementById('uploadSection').style.display = 'block';
+            
+            // 文件选择监听
+            document.getElementById('onnxFile').addEventListener('change', updateFileInfo);
+            
+            // 运行兼容性检查
+            runCompatibilityCheck();
+        });
+        
+        // ========== Tab 切换 ==========
+        function switchTab(tabName) {
+            // 隐藏所有 tab
+            document.querySelectorAll('.tab-content').forEach(el => {
+                el.classList.remove('active');
+            });
+            document.querySelectorAll('.tab-btn').forEach(el => {
+                el.classList.remove('active');
+            });
+            
+            // 显示选中的 tab
+            document.getElementById(tabName + 'Section').classList.add('active');
+            event.target.classList.add('active');
+            
+            // 如果切换到诊断，运行检查
+            if (tabName === 'diagnostic') {
+                runCompatibilityCheck();
+            }
+        }
+        
+        // ========== 日志记录 ==========
+        function log(message, type = 'log') {
+            const timestamp = new Date().toLocaleTimeString();
+            const formatted = `[${timestamp}] ${message}`;
+            debugLogs.push({ message: formatted, type });
+            
+            const consoleEl = document.getElementById('debugConsole');
+            const logEl = document.createElement('div');
+            logEl.className = type;
+            logEl.textContent = formatted;
+            consoleEl.appendChild(logEl);
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+            
+            // 同时输出到浏览器控制台
+            if (type === 'error') console.error(message);
+            else if (type === 'warn') console.warn(message);
+            else if (type === 'info') console.info(message);
+            else console.log(message);
+        }
+        
+        // ========== 更新文件信息 ==========
+        function updateFileInfo() {
+            const onnxFileInput = document.getElementById('onnxFile');
+            const modelInfoGrid = document.getElementById('modelInfoGrid');
+            
+            if (onnxFileInput.files && onnxFileInput.files[0]) {
+                const file = onnxFileInput.files[0];
+                document.getElementById('modelFileName').textContent = file.name;
+                document.getElementById('modelFileSize').textContent = formatFileSize(file.size);
+                document.getElementById('tokenizerStatus').textContent = "等待上传...";
+                modelInfoGrid.style.display = 'grid';
+            }
+        }
+        
+        // ========== 格式化文件大小 ==========
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
+            return (bytes / 1024 / 1024).toFixed(2) + ' MB';
+        }
+        
+        // ========== 更新进度 ==========
+        function updateProgress(percent, message) {
+            const progressBar = document.getElementById('progressBar');
+            const progressContainer = document.getElementById('progressContainer');
+            const statusMessage = document.getElementById('statusMessage');
+            
+            progressBar.style.width = percent + '%';
+            progressBar.textContent = percent + '%';
+            statusMessage.textContent = message;
+            progressContainer.style.display = 'block';
+        }
+        
+        // ========== 显示错误 ==========
+        function showError(message) {
+            const errorMessage = document.getElementById('errorMessage');
+            errorMessage.textContent = '❌ ' + message;
+            errorMessage.style.display = 'block';
+            log(message, 'error');
+        }
+        
+        // ========== 显示成功 ==========
+        function showSuccess(message) {
+            const successMessage = document.getElementById('successMessage');
+            successMessage.textContent = '✅ ' + message;
+            successMessage.style.display = 'block';
+            log(message, 'success');
+        }
+        
+        // ========== 兼容性检查 ==========
+        function runCompatibilityCheck() {
+            const grid = document.getElementById('compatibilityGrid');
+            grid.innerHTML = '';
+            
+            const checks = [
+                {
+                    name: "WebGPU 支持",
+                    status: typeof navigator !== 'undefined' && navigator.gpu ? 'ok' : 'fail',
+                    message: navigator.gpu ? "✅ 支持" : "❌ 不支持（将使用 WASM）"
+                },
+                {
+                    name: "SharedArrayBuffer",
+                    status: typeof SharedArrayBuffer !== 'undefined' ? 'ok' : 'warn',
+                    message: typeof SharedArrayBuffer !== 'undefined' ? "✅ 可用" : "⚠️ 不可用（WASM 性能可能降低）"
+                },
+                {
+                    name: "浏览器",
+                    status: 'info',
+                    message: navigator.userAgent.split(' ').find(x => x.includes('Chrome') || x.includes('Firefox') || x.includes('Safari') || x.includes('Edg'))
+                },
+                {
+                    name: "内存",
+                    status: 'info',
+                    message: `可用: ${Math.round(navigator.deviceMemory || 8)} GB`
+                }
+            ];
+            
+            checks.forEach(check => {
+                const item = document.createElement('div');
+                item.className = `compat-item ${check.status}`;
+                item.innerHTML = `<strong>${check.name}</strong>${check.message}`;
+                grid.appendChild(item);
+            });
+        }
+        
+        // ========== 读取文件 ==========
+        function readFileAsArrayBuffer(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = (e) => reject(new Error("读取文件失败: " + e.target.error));
+                reader.readAsArrayBuffer(file);
+            });
+        }
+        
+        function readFileAsText(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = (e) => reject(new Error("读取文件失败: " + e.target.error));
+                reader.readAsText(file);
+            });
+        }
+        
+        // ========== 加载模型和分词器 ==========
+        async function loadModelAndTokenizer() {
+            const statusMessage = document.getElementById('statusMessage');
+            const loadBtn = document.getElementById('loadBtn');
+            
+            document.getElementById('errorMessage').style.display = 'none';
+            document.getElementById('successMessage').style.display = 'none';
+            
+            const onnxFile = document.getElementById('onnxFile').files[0];
+            const tokenizerJsonFile = document.getElementById('tokenizerJsonFile').files[0];
+            
+            if (!onnxFile) {
+                showError("请上传 ONNX 模型文件！");
+                return;
+            }
+            
+            if (!tokenizerJsonFile) {
+                showError("请上传分词器文件 (tokenizer.json)！");
+                return;
+            }
+            
+            loadBtn.disabled = true;
+            loadBtn.textContent = "⏳ 诊断中...";
+            
+            try {
+                log("========== 诊断开始 ==========", "info");
+                log(`模型文件: ${onnxFile.name} (${formatFileSize(onnxFile.size)})`, "info");
+                log(`Tokenizer: ${tokenizerJsonFile.name} (${formatFileSize(tokenizerJsonFile.size)})`, "info");
+                
+                // 读取文件
+                updateProgress(10, "正在读取模型文件...");
+                modelArrayBuffer = await readFileAsArrayBuffer(onnxFile);
+                log(`模型文件读取完成: ${modelArrayBuffer.byteLength} 字节`, "success");
+                updateProgress(30, "模型文件读取完成");
+                
+                updateProgress(40, "正在读取分词器文件...");
+                tokenizerJsonStr = await readFileAsText(tokenizerJsonFile);
+                log("分词器文件读取完成", "success");
+                updateProgress(60, "分词器文件读取完成");
+                
+                // 检查是否包含外部数据
+                log("检查模型是否包含外部数据...", "info");
+                const hasExternalData = checkExternalData(modelArrayBuffer);
+                if (hasExternalData) {
+                    log("⚠️ 检测到外部数据引用！这可能导致加载失败。", "warn");
+                    showError(
+                        "⚠️ 检测到模型包含外部数据（.data 文件）！\n\n" +
+                        "这会导致浏览器加载失败。请将模型转换为单文件格式：\n\n" +
+                        "1. 使用 Python 脚本转换（推荐）\n" +
+                        "2. 或使用在线转换工具"
+                    );
+                    loadBtn.disabled = false;
+                    loadBtn.textContent = "🔍 诊断并加载";
+                    return;
+                } else {
+                    log("✅ 模型为单文件格式，无外部数据引用", "success");
+                }
+                
+                // 初始化 Tokenizer
+                updateProgress(65, "正在初始化分词器...");
+                await initializeTokenizer();
+                updateProgress(75, "分词器初始化完成");
+                
+                // 加载 ONNX 模型
+                updateProgress(80, "正在加载模型（这可能需要一会儿）...");
+                await initializeModel();
+                updateProgress(95, "模型加载完成");
+                
+                // 完成
+                setTimeout(() => {
+                    updateProgress(100, "✅ 模型和分词器加载完成！");
+                    
+                    isModelLoaded = true;
+                    document.getElementById('inferenceTabBtn').disabled = false;
+                    switchTab('inference');
+                    document.getElementById('progressContainer').style.display = 'none';
+                    
+                    showSuccess("🎉 模型加载成功！现在可以输入提示词进行推理了。");
+                    
+                    loadBtn.disabled = false;
+                    loadBtn.textContent = "🔍 诊断并加载";
+                }, 500);
+                
+            } catch (error) {
+                log("加载失败: " + error.message, "error");
+                log("堆栈: " + error.stack, "error");
+                
+                showError("加载失败: " + error.message + "\n\n" +
+                    "可能的原因：\n" +
+                    "1. 模型包含外部数据（.data 文件）\n" +
+                    "2. Tokenizer 与模型不匹配\n" +
+                    "3. 模型格式不正确");
+                
+                statusMessage.textContent = "❌ 加载失败";
+                document.getElementById('progressContainer').style.display = 'none';
+                loadBtn.disabled = false;
+                loadBtn.textContent = "🔍 诊断并加载";
+                
+                // 自动切换到诊断页面
+                switchTab('diagnostic');
+            }
+        }
+        
+        // ========== 检查外部数据 ==========
+        function checkExternalData(arrayBuffer) {
+            // 将 ArrayBuffer 转换为文本（前 10000 字节）
+            const decoder = new TextDecoder('utf-8');
+            const header = decoder.decode(arrayBuffer.slice(0, Math.min(10000, arrayBuffer.byteLength)));
+            
+            // 检查是否包含外部数据引用
+            const patterns = [
+                /external_data/i,
+                /\.data["']/,
+                /location.*\.data/i
+            ];
+            
+            return patterns.some(pattern => pattern.test(header));
+        }
+        
+        // ========== 初始化 Tokenizer ==========
+        async function initializeTokenizer() {
+            log("初始化 Tokenizer...", "info");
+            
+            try {
+                const blob = new Blob([tokenizerJsonStr], { type: 'application/json' });
+                const tokenizerUrl = URL.createObjectURL(blob);
+                
+                tokenizer = await window.Transformers.AutoTokenizer.from_pretrained(tokenizerUrl);
+                URL.revokeObjectURL(tokenizerUrl);
+                
+                log(`✅ Tokenizer 初始化成功`, "success");
+                log(`  - 词汇表大小: ${tokenizer.vocab_size || "未知"}`, "info");
+                log(`  - EOS Token ID: ${tokenizer.eos_token_id || "未知"}`, "info");
+                log(`  - BOS Token ID: ${tokenizer.bos_token_id || "未知"}`, "info");
+                
+                document.getElementById('tokenizerStatus').textContent = "✅ 已加载";
+                
+            } catch (error) {
+                log("Tokenizer 初始化失败: " + error.message, "error");
+                throw error;
+            }
+        }
+        
+        // ========== 初始化 ONNX 模型 ==========
+        async function initializeModel() {
+            log("加载 ONNX 模型...", "info");
+            log(`  模型大小: ${formatFileSize(modelArrayBuffer.byteLength)}`, "info");
+            
+            try {
+                // 配置执行提供者
+                const sessionOptions = {
+                    executionProviders: ['wasm'],
+                    graphOptimizationLevel: 'all',
+                    logSeverityLevel: 3,
+                };
+                
+                // 检测 WebGPU
+                if (typeof navigator !== 'undefined' && navigator.gpu) {
+                    log("检测到 WebGPU，尝试使用...", "info");
+                    sessionOptions.executionProviders = ['webgpu', 'wasm'];
+                }
+                
+                log(`执行提供者: ${sessionOptions.executionProviders.join(', ')}`, "info");
+                
+                // 创建会话
+                session = await ort.InferenceSession.create(modelArrayBuffer, sessionOptions);
+                
+                log("✅ ONNX 模型加载成功", "success");
+                log(`  输入节点: ${session.inputNames.join(', ')}`, "info");
+                log(`  输出节点: ${session.outputNames.join(', ')}`, "info");
+                log(`  执行提供者: ${session.executionProviders.join(', ')}`, "info");
+                
+                // 验证输入输出
+                if (!session.inputNames || session.inputNames.length === 0) {
+                    throw new Error("模型没有有效的输入节点");
+                }
+                
+            } catch (error) {
+                log("ONNX 模型加载失败: " + error.message, "error");
+                
+                // 特殊错误处理
+                if (error.message.includes('external data')) {
+                    throw new Error(
+                        '模型包含外部数据文件(.data)，请转换为单文件格式。\n' +
+                        '转换方法见诊断页面。'
+                    );
+                }
+                
+                if (error.message.includes('WebGPU')) {
+                    log("WebGPU 初始化失败，降级到 WASM", "warn");
+                    const sessionOptions = {
+                        executionProviders: ['wasm'],
+                        graphOptimizationLevel: 'all'
+                    };
+                    session = await ort.InferenceSession.create(modelArrayBuffer, sessionOptions);
+                    log("✅ 使用 WASM 成功加载模型", "success");
+                } else {
+                    throw error;
+                }
+            }
+        }
+        
+        // ========== 运行推理 ==========
+        async function runInference() {
+            if (!isModelLoaded || !session || !tokenizer) {
+                alert("模型或分词器未加载完成！");
+                return;
+            }
+            
+            const promptInput = document.getElementById('promptInput').value.trim();
+            if (!promptInput) {
+                alert("请输入提示词！");
+                return;
+            }
+            
+            const generatedTextDiv = document.getElementById('generatedText');
+            generatedTextDiv.innerHTML = '🧠 正在生成...';
+            
+            try {
+                log("========== 推理开始 ==========", "info");
+                log(`提示词: "${promptInput}"`, "info");
+                
+                // 编码
+                const encoded = tokenizer.encode(promptInput, { add_special_tokens: true });
+                const inputIds = encoded.tolist();
+                
+                log(`编码结果: ${inputIds.length} tokens`, "info");
+                
+                // 准备输入
+                const inputTensor = new ort.Tensor(
+                    'int64',
+                    BigInt64Array.from(inputIds.map(n => BigInt(n))),
+                    [1, inputIds.length]
+                );
+                
+                // 推理
+                const feeds = { input_ids: inputTensor };
+                const startTime = performance.now();
+                const results = await session.run(feeds);
+                const endTime = performance.now();
+                
+                log(`推理耗时: ${((endTime - startTime) / 1000).toFixed(2)} 秒`, "success");
+                
+                // 获取 logits
+                const logits = results.logits;
+                log(`Logits 形状: [${logits.dims.join(', ')}]`, "info");
+                
+                // 采样
+                const logitsData = logits.data;
+                const vocabSize = logits.dims[logits.dims.length - 1];
+                const lastTokenLogits = logitsData.slice(-vocabSize);
+                
+                const nextTokenId = sampleFromLogits(lastTokenLogits, 0.7);
+                const nextTokenStr = tokenizer.decode([nextTokenId], { skip_special_tokens: true });
+                
+                log(`生成 Token ID: ${nextTokenId}`, "info");
+                log(`生成文本: "${nextTokenStr}"`, "info");
+                
+                generatedTextDiv.innerHTML = `<strong>${promptInput}</strong>${nextTokenStr}`;
+                
+            } catch (error) {
+                log("推理失败: " + error.message, "error");
+                generatedTextDiv.innerHTML = `❌ 推理失败: ${error.message}`;
+            }
+        }
+        
+        // ========== 采样 ==========
+        function sampleFromLogits(logits, temperature = 1.0) {
+            const scaledLogits = logits.map(logit => logit / temperature);
+            
+            const maxLogit = Math.max(...scaledLogits);
+            const expLogits = scaledLogits.map(logit => Math.exp(logit - maxLogit));
+            const sumExpLogits = expLogits.reduce((a, b) => a + b, 0);
+            const probs = expLogits.map(expLogit => expLogit / sumExpLogits);
+            
+            const rand = Math.random();
+            let cumProb = 0;
+            for (let i = 0; i < probs.length; i++) {
+                cumProb += probs[i];
+                if (rand < cumProb) {
+                    return i;
+                }
+            }
+            
+            return probs.indexOf(Math.max(...probs));
+        }
+        
+        // ========== 重置 ==========
+        function resetPage() {
+            isModelLoaded = false;
+            session = null;
+            tokenizer = null;
+            modelArrayBuffer = null;
+            tokenizerJsonStr = null;
+            debugLogs = [];
+            
+            document.getElementById('uploadSection').style.display = 'block';
+            document.getElementById('inferenceSection').style.display = 'none';
+            document.getElementById('diagnosticSection').style.display = 'none';
+            
+            document.getElementById('onnxFile').value = '';
+            document.getElementById('tokenizerJsonFile').value = '';
+            document.getElementById('promptInput').value = '';
+            document.getElementById('generatedText').textContent = '输入提示词后点击"生成文本"';
+            document.getElementById('modelInfoGrid').style.display = 'none';
+            document.getElementById('debugConsole').innerHTML = '<div class="log">等待诊断...</div>';
+            
+            document.getElementById('statusMessage').textContent = "✅ 准备就绪，请上传模型文件...";
+            document.getElementById('errorMessage').style.display = 'none';
+            document.getElementById('successMessage').style.display = 'none';
+            document.getElementById('inferenceTabBtn').disabled = true;
+            
+            // 切换回上传标签
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            document.querySelector('.tab-btn:first-child').classList.add('active');
+        }
+    </script>
+</body>
+</html>
