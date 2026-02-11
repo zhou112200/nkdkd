@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local ONNX GPT Inference (Upload)</title>
+    <!-- 引入 ONNX Runtime Web -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.24.0/dist/ort-web.min.js"></script>
+
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        #statusMessage { color: blue; }
+        #errorMessage { color: red; display: none; }
+        #uploadSection, #inferenceSection { display: none; }
+        .file-upload { margin-bottom: 10px; }
+        textarea, input[type="text"], button { width: 100%; margin-top: 10px; padding: 10px; box-sizing: border-box; }
+        #generatedText { background-color: #f0f0f0; padding: 10px; white-space: pre-wrap; }
+        #progressContainer { width: 100%; background-color: #ddd; margin-top: 10px; display: none; }
+        #progressBar { width: 0%; height: 20px; background-color: #4CAF50; text-align: center; line-height: 20px; color: white; }
+    </style>
+</head>
+<body>
+    <h1>Local ONNX GPT Inference (Upload Files)</h1>
+    <p><strong>注意：</strong>请分别上传模型文件和分词器文件。需要上传：<code>gpt_model.onnx</code>, <code>gpt_model.onnx.data</code>, <code>tokenizer.json</code>, <code>tokenizer_config.json</code>.</p>
+
+    <div id="statusMessage">请选择并上传模型和分词器文件...</div>
+    <div id="errorMessage"></div>
+
+    <div id="uploadSection">
+        <div class="file-upload">
+            <label for="onnxFile">选择 ONNX 模型文件 (.onnx):</label>
+            <input type="file" id="onnxFile" accept=".onnx" />
+        </div>
+        <div class="file-upload">
+            <label for="dataFile">选择 ONNX 数据文件 (.data):</label>
+            <input type="file" id="dataFile" accept=".data" />
+        </div>
+        <div class="file-upload">
+            <label for="tokenizerJsonFile">选择分词器 JSON 文件 (tokenizer.json):</label>
+            <input type="file" id="tokenizerJsonFile" accept=".json" />
+        </div>
+        <div class="file-upload">
+            <label for="tokenizerConfigFile">选择分词器配置文件 (tokenizer_config.json):</label>
+            <input type="file" id="tokenizerConfigFile" accept=".json" />
+        </div>
+        <button onclick="loadModelAndTokenizer()">加载模型和分词器</button>
+    </div>
+
+    <div id="progressContainer">
+        <div id="progressBar">0%</div>
+    </div>
+
+    <div id="inferenceSection">
+        <label for="promptInput">输入提示词 (Prompt):</label>
+        <input type="text" id="promptInput" placeholder="例如: Once upon a time">
+
+        <button onclick="runInference()">开始推理</button>
+
+        <label for="generatedText">生成结果:</label>
+        <div id="generatedText"></div>
+    </div>
+
+    <script>
+        let session = null;
+        let tokenizer = null;
+        let modelArrayBuffer = null;
+        let dataArrayBuffer = null;
+        let tokenizerJsonObj = null;
+        let tokenizerConfigObj = null;
+
+        // --- Tokenizer Logic (Simplified JS Implementation) ---
+        // This is a simplified example assuming GPT-2 style BPE tokenizer
+        // A full implementation would be much more complex
+        class SimpleTokenizer {
+            constructor(vocab, merges, specialTokens) {
+                this.vocab = vocab;
+                this.merges = new Map(merges.map(([pair]) => [pair.join('@@'), pair])); // Simplified merge lookup
+                this.specialTokens = specialTokens || {};
+                // Reverse vocab map for decoding
+                this.decoder = Object.fromEntries(Object.entries(this.vocab).map(([key, value]) => [value, key]));
+            }
+
+            encode(text) {
+                // This is a highly simplified version
+                // Real BPE involves splitting into characters, finding merges, etc.
+                // Using a library like 'tokenizers' in Python or a dedicated JS port would be better
+                // For demo purposes, we'll use a basic word/space split and map to known tokens
+                // This won't work correctly for your model without a proper BPE tokenizer JS implementation
+                console.error("Full BPE tokenization is complex. This demo uses a placeholder.");
+                // Placeholder: just split by space and map simple words (not accurate for GPT-2 vocab)
+                const tokens = text.split(/\s+/).map(word => this.vocab[word] || this.vocab['<|endoftext|>']); // Fallback to eos token
+                return tokens.filter(t => t !== undefined);
+            }
+
+            decode(tokens) {
+                // Decode tokens back to string
+                return tokens.map(id => this.decoder[id]).join('').replace(/(@@ )|(@@ ?$)/g, '');
+            }
+        }
+
+        function loadModelAndTokenizer() {
+            const statusMessage = document.getElementById('statusMessage');
+            const errorMessage = document.getElementById('errorMessage');
+            const uploadSection = document.getElementById('uploadSection');
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+
+            errorMessage.style.display = 'none';
+
+            // Get file inputs
+            const onnxFile = document.getElementById('onnxFile').files[0];
+            const dataFile = document.getElementById('dataFile').files[0];
+            const tokenizerJsonFile = document.getElementById('tokenizerJsonFile').files[0];
+            const tokenizerConfigFile = document.getElementById('tokenizerConfigFile').files[0];
+
+            if (!onnxFile || !dataFile || !tokenizerJsonFile || !tokenizerConfigFile) {
+                errorMessage.textContent = "请上传所有必需的文件！";
+                errorMessage.style.display = 'block';
+                return;
+            }
+
+            // --- Read files using FileReader ---
+            const readerOnnx = new FileReader();
+            const readerData = new FileReader();
+            const readerTokenizerJson = new FileReader();
+            const readerTokenizerConfig = new FileReader();
+
+            let loadedCount = 0;
+            const totalFiles = 4;
+
+            function checkAllLoaded() {
+                loadedCount++;
+                if (loadedCount === totalFiles) {
+                    initializeModelAndTokenizer();
+                }
+            }
+
+            readerOnnx.onload = function(e) {
+                modelArrayBuffer = e.target.result;
+                checkAllLoaded();
+            };
+            readerOnnx.onerror = () => { errorMessage.textContent = "加载 .onnx 文件失败"; errorMessage.style.display = 'block'; };
+            readerOnnx.readAsArrayBuffer(onnxFile);
+
+            readerData.onload = function(e) {
+                dataArrayBuffer = e.target.result;
+                checkAllLoaded();
+            };
+            readerData.onerror = () => { errorMessage.textContent = "加载 .data 文件失败"; errorMessage.style.display = 'block'; };
+            readerData.readAsArrayBuffer(dataFile);
+
+            readerTokenizerJson.onload = function(e) {
+                try {
+                    tokenizerJsonObj = JSON.parse(e.target.result);
+                    checkAllLoaded();
+                } catch (err) {
+                    errorMessage.textContent = "解析 tokenizer.json 失败: " + err.message;
+                    errorMessage.style.display = 'block';
+                }
+            };
+            readerTokenizerJson.onerror = () => { errorMessage.textContent = "加载 tokenizer.json 文件失败"; errorMessage.style.display = 'block'; };
+            readerTokenizerJson.readAsText(tokenizerJsonFile);
+
+            readerTokenizerConfig.onload = function(e) {
+                try {
+                    tokenizerConfigObj = JSON.parse(e.target.result);
+                    checkAllLoaded();
+                } catch (err) {
+                    errorMessage.textContent = "解析 tokenizer_config.json 失败: " + err.message;
+                    errorMessage.style.display = 'block';
+                }
+            };
+            readerTokenizerConfig.onerror = () => { errorMessage.textContent = "加载 tokenizer_config.json 文件失败"; errorMessage.style.display = 'block'; };
+            readerTokenizerConfig.readAsText(tokenizerConfigFile);
+
+            statusMessage.textContent = "正在读取上传的文件...";
+            progressContainer.style.display = 'block';
+        }
+
+        async function initializeModelAndTokenizer() {
+            const statusMessage = document.getElementById('statusMessage');
+            const errorMessage = document.getElementById('errorMessage');
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+
+            try {
+                // --- Create and Load Tokenizer ---
+                console.log("Initializing tokenizer from uploaded files...");
+                if (tokenizerJsonObj.model && tokenizerJsonObj.model.type === "BPE") {
+                    const vocabMap = tokenizerJsonObj.model.vocab;
+                    const mergesArray = tokenizerJsonObj.model.merges;
+                    const specialTokens = tokenizerConfigObj.special_tokens_map || {};
+
+                    tokenizer = new SimpleTokenizer(vocabMap, mergesArray, specialTokens);
+                    console.log("Tokenizer loaded from uploaded files (placeholder implementation).");
+                } else {
+                    throw new Error("Uploaded tokenizer model type is not BPE or structure is unexpected. Full JS tokenizer support needed.");
+                }
+
+                // --- Load ONNX Model ---
+                console.log("Loading ONNX model from uploaded files...");
+                const sessionOptions = {
+                    executionProviders: ['webgpu', 'wasm'], // Prefer WebGPU, fall back to WASM
+                    graphOptimizationLevel: 'all'
+                };
+                session = new ort.InferenceSession(sessionOptions);
+
+                // Load model using the ArrayBuffer from the uploaded .onnx file
+                // The .data file's ArrayBuffer should ideally be associated with the .onnx file's data
+                // ONNX.js/ORT.web handles external data by looking for the .data file path relative to the .onnx file
+                // When loading from an ArrayBuffer, the external data needs to be available somehow.
+                // This is often done by providing a base url or relying on a virtual file system if available.
+                // In pure browser JS, this is tricky. ONNXRuntime.js expects the .data file to be fetchable relative to the .onnx file.
+                // However, when loading from an ArrayBuffer, it *might* require the .data file to also be handled carefully.
+                // A common workaround is to use ort.InferenceSession() and then manually provide the external data
+                // via session.loadModel(new Uint8Array(modelArrayBuffer)), but this usually expects the .data to be embedded or handled separately by the framework.
+                // For external data, the simplest way with ONNXRuntime.js in browsers is often still via fetch from an http server.
+                // BUT, since we read the .data file into memory too, we might need to trick the system or hope the runtime can handle it.
+                // Let's try loading the model buffer directly. If it fails due to missing .data, we might need a different approach or accept limitations.
+                // ONNXRuntime.js might automatically look for the corresponding .data file in the same directory if loaded via URL,
+                // but when loading an ArrayBuffer, the handling of external data becomes more complex and sometimes relies on specific setup.
+                // The runtime might embed the data or expect a mechanism we're not fully replicating here by just reading buffers.
+                // In practice, this step might fail if the runtime strictly requires the .data file to be fetchable by name.
+
+                // Attempt to load the model with the ArrayBuffer
+                // Note: This might fail if the runtime strictly enforces external data loading via network requests
+                // even when the main .onnx is provided as a buffer. This is a limitation of client-side ONNX loading.
+                // More advanced setups might involve Web Workers or Virtual File Systems (like Emscripten FS) which are complex.
+                statusMessage.textContent = "正在加载模型... (这可能需要一会儿)";
+                await session.loadModel(new Uint8Array(modelArrayBuffer));
+                console.log("ONNX model loaded from ArrayBuffer.");
+
+                // Show success, hide upload, show inference
+                statusMessage.textContent = "模型和分词器加载完成！";
+                document.getElementById('uploadSection').style.display = 'none';
+                progressContainer.style.display = 'none';
+                document.getElementById('inferenceSection').style.display = 'block';
+
+            } catch (error) {
+                console.error("Initialization Error:", error);
+                errorMessage.textContent = `初始化失败: ${error.message}`;
+                errorMessage.style.display = 'block';
+                statusMessage.textContent = "初始化失败。";
+                progressContainer.style.display = 'none';
+            }
+        }
+
+        async function runInference() {
+            if (!session || !tokenizer) {
+                alert("模型或分词器未加载完成！");
+                return;
+            }
+
+            const promptInput = document.getElementById('promptInput').value.trim();
+            if (!promptInput) {
+                alert("请输入提示词！");
+                return;
+            }
+
+            const generatedTextDiv = document.getElementById('generatedText');
+            generatedTextDiv.textContent = "正在生成...";
+
+            try {
+                // Encode prompt (using placeholder tokenizer)
+                // This is where the simplified tokenizer will likely fail for complex inputs
+                const encodedPrompt = tokenizer.encode(promptInput);
+                if (encodedPrompt.length === 0) {
+                    throw new Error("分词器无法处理输入，返回空序列。");
+                }
+                console.log("Encoded prompt:", encodedPrompt);
+
+                // Convert to tensor (shape: [batch_size, sequence_length])
+                const inputTensor = new ort.Tensor('int64', BigInt64Array.from(encodedPrompt.map(n => BigInt(n))), [1, encodedPrompt.length]);
+
+                // Run inference (placeholder for single-step generation)
+                const feeds = { input_ids: inputTensor };
+                const results = await session.run(feeds);
+
+                // Get logits (shape: [batch_size, sequence_length, vocab_size])
+                const logits = results.logits;
+                console.log("Logits shape:", logits.dims); // Should be [1, sequence_length, vocab_size]
+
+                // Placeholder: Just take argmax of the last token's logits for demo
+                const logitsData = logits.data;
+                const seqLen = logits.dims[1];
+                const vocabSize = logits.dims[2];
+                const lastTokenLogits = logitsData.slice(-vocabSize); // Get last vocab logits
+                let nextTokenId = 0;
+                let maxLogit = -Infinity;
+                for (let i = 0; i < lastTokenLogits.length; i++) {
+                    if (lastTokenLogits[i] > maxLogit) {
+                        maxLogit = lastTokenLogits[i];
+                        nextTokenId = i;
+                    }
+                }
+
+                // Decode the next token
+                const nextTokenStr = tokenizer.decode([nextTokenId]);
+                const fullGeneratedText = promptInput + nextTokenStr; // Very basic concatenation
+
+                generatedTextDiv.textContent = fullGeneratedText;
+                console.log("Generated token ID:", nextTokenId, "String:", nextTokenStr);
+
+            } catch (error) {
+                console.error("Inference Error:", error);
+                generatedTextDiv.textContent = `推理失败: ${error.message}`;
+            }
+        }
+
+    </script>
+</body>
+</html>
